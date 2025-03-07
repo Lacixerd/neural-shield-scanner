@@ -46,6 +46,9 @@ def run_port_scanner():
 
 if __name__ == "__main__":
     try:
+        if config['license_key'] == "":
+            print("License key not found in config.json")
+            exit()
         sniffer_thread = Thread(target=run_packet_sniffer)
         sniffer_thread.daemon = True
         sniffer_thread.start()
