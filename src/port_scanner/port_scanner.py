@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple
 import json
 import os
+import requests
 
 with open("config.json", "r") as f:
     config_file = json.load(f)
@@ -50,6 +51,8 @@ def scan_port(target_port: Tuple[str, int]) -> Tuple[int, bool, str]:
     return port, False, None
 
 def run_scanner():
+    context_data = []
+
     try:
         with open("scanner_running.signal", "w") as f:
             f.write("1")
@@ -81,8 +84,31 @@ def run_scanner():
                 # ip_network = ipaddress.ip_network(target_range)
                 # targets = list(ip_network.hosts())
                 targets = ip_discover(target_range)
+
+                url = "http://localhost:8000/apis/authorize/ip-discover-log/"
+
+                headers = {
+                    "Authorization": f"Token {config_file['api_token']}",
+                    "Content-Type": "application/json"
+                }
+
+                payload = {
+                    "license_key": config_file["license_key"],
+                    "results": targets
+                }
+
+                response = requests.post(url, headers=headers, json=payload)
+
+                if response.status_code == 201:
+                    print("IP Discovery Success")
+                else:
+                    print(f"IP Discovery Failed: {response.status_code}")
+            
             except ValueError:
                 print("Invalid IP range format. Please use CIDR notation (example: 192.168.1.0/24)")
+                sys.exit()
+            except Exception as e:
+                print(f"IP Discovery Error: {e}")
                 sys.exit()
 
         print("-" * 50)
@@ -125,14 +151,54 @@ def run_scanner():
                         if result[1]:
                             open_ports.append(result)
                 
+
                 if open_ports:
+                    # Terminal çıktısı
                     print(f"\nOpen ports for {target}:")
                     for port, _, service in sorted(open_ports):
                         print("Port {:<6} | State: open | Protocol: TCP | Service: {}".format(port, service))
+                    
+                    # JSON formatında veri saklama
+                    open_port_numbers = [port for port, _, _ in open_ports]
+                    target_data = {
+                        "ip_address": target,
+                        "ports_open": open_port_numbers,
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    context_data.append(target_data)
                 else:
                     print(f"\nNo open ports found for {target}")
                 
                 print("\n"+"-" * 50)
+                
+            url = "http://localhost:8000/apis/authorize/network-scan/"
+
+            headers = {
+                "Authorization": f"Token {config_file['api_token']}",
+                "Content-Type": "application/json"
+            }
+
+            payload = {
+                "license_key": config_file["license_key"],
+                "results": context_data  # JSON dumps'a gerek yok, requests.post json parametresi otomatik serialize eder
+            }
+
+            try:
+                response = requests.post(url, headers=headers, json=payload)
+                
+                if response.status_code == 201:
+                    print("Network Scan Log Success")
+                else:
+                    print(f"Network Scan Log Failed: {response.status_code}")
+                    # Hata detaylarını görüntüle
+                    try:
+                        error_details = response.json()
+                        print(f"Error details: {error_details}")
+                    except:
+                        print(f"Error content: {response.text}")
+            except Exception as e:
+                print(f"Request error: {str(e)}")
+                
                 
     except KeyboardInterrupt:
         print("\nExiting program.")
