@@ -13,6 +13,7 @@ import json
 from datetime import datetime
 import os
 import time
+import sys
 
 TAB_1 = '\t - '
 TAB_2 = '\t\t - '
@@ -185,6 +186,78 @@ def format_multi_line(prefix, string, size=80):
         if size % 2:
             size -= 1
     return '\n'.join([prefix + line for line in textwrap.wrap(string, size)])
+
+def parse_hex_data(hex_string):
+    """
+    Bir hex string (\xcf\x85 formatında) alır ve binary veri olarak çevirir.
+    Örnek: '\xcf\x85\xb7' -> b'\xcf\x85\xb7'
+    """
+    # Hex string'i temizle
+    hex_string = hex_string.replace('\\x', '')
+    hex_string = hex_string.replace('\\', '')
+    
+    # Her ikili karakteri byte'a çevir
+    binary_data = b''
+    for i in range(0, len(hex_string), 2):
+        if i+1 < len(hex_string):
+            hex_byte = hex_string[i:i+2]
+            try:
+                binary_data += bytes([int(hex_byte, 16)])
+            except ValueError:
+                pass
+    
+    return binary_data
+
+def analyze_binary_data(binary_data):
+    """
+    Binary veriyi analiz eder ve içeriğini anlaşılır formatta gösterir.
+    """
+    try:
+        # Ethernet çerçevesini ayrıştır
+        dest_mac, src_mac, eth_proto, data = ethernet_frame(binary_data)
+        print('\nEthernet Frame:')
+        print(TAB_1 + f'Destination: {dest_mac}, Source: {src_mac}, Protocol: {eth_proto}')
+        
+        # IPv4 paketi mi kontrol et
+        if eth_proto == 8:
+            (version, header_length, ttl, proto, src, target, data) = ipv4_packet(data)
+            print(TAB_1 + 'IPv4 Packet:')
+            print(TAB_2 + f'Version: {version}, Header Length: {header_length}, TTL: {ttl}')
+            print(TAB_2 + f'Protocol: {proto}')
+            print(TAB_2 + f'Source: {src}, Target: {target}')
+            
+            # Protokol türüne göre ayrıştır
+            if proto == 1:
+                icmp_type, code, checksum, data = icmp_packet(data)
+                print(TAB_1 + 'ICMP Packet:')
+                print(TAB_2 + f'Type: {icmp_type}, Code: {code}, Checksum: {checksum}')
+                
+            elif proto == 6:
+                src_port, dest_port, sequence, acknowledgement, flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin, data = tcp_segment(data)
+                print(TAB_1 + 'TCP Segment:')
+                print(TAB_2 + f'Source Port: {src_port}, Destination Port: {dest_port}')
+                print(TAB_2 + f'Sequence: {sequence}, Acknowledgement: {acknowledgement}')
+                print(TAB_2 + 'Flags:')
+                print(TAB_3 + f'URG: {flag_urg}, ACK: {flag_ack}, PSH: {flag_psh}, RST: {flag_rst}, SYN: {flag_syn}, FIN: {flag_fin}')
+                
+            elif proto == 17:
+                src_port, dest_port, length, data = udp_segment(data)
+                print(TAB_1 + 'UDP Segment:')
+                print(TAB_2 + f'Source Port: {src_port}, Destination Port: {dest_port}')
+                print(TAB_2 + f'Size: {length}')
+    
+    except Exception as e:
+        print(f"Veri ayrıştırma hatası: {e}")
+        print(f"Ham veri: {binary_data}")
         
 if __name__ == "__main__":
-    main()
+    # Eğer analiz edilecek hex veri varsa:
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--analyze-hex":
+            hex_data = input("Analiz edilecek hex veriyi girin (\\xcf\\x85\\xb7 formatında): ")
+            binary_data = parse_hex_data(hex_data)
+            analyze_binary_data(binary_data)
+        else:
+            main()
+    else:
+        main()
