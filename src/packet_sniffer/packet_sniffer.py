@@ -14,16 +14,18 @@ from datetime import datetime
 import os
 import time
 import sys
+import zlib
+import base64
 
 TAB_1 = '\t - '
 TAB_2 = '\t\t - '
 TAB_3 = '\t\t\t - '
 TAB_4 = '\t\t\t\t - '
 
-# DATA_TAB_1 = '\t '
-# DATA_TAB_2 = '\t\t '
-# DATA_TAB_3 = '\t\t\t '
-# DATA_TAB_4 = '\t\t\t\t '
+DATA_TAB_1 = '\t '
+DATA_TAB_2 = '\t\t '
+DATA_TAB_3 = '\t\t\t '
+DATA_TAB_4 = '\t\t\t\t '
 
 def is_scanner_running():
     return os.path.exists("scanner_running.signal")
@@ -51,6 +53,28 @@ def main():
         
         with open(file_path, 'w') as f:
             json.dump(existing_data, f, indent=2)
+        
+        # Veriyi sıkıştır ve terminalde göster
+        compressed = compress_data(packet_data)
+        
+        # Sıkıştırma oranını hesapla
+        original_size = len(json.dumps(packet_data))
+        compressed_size = len(compressed)
+        ratio = (1 - compressed_size / original_size) * 100 if original_size > 0 else 0
+        
+        print("\n" + "-" * 50)
+        print(f"Orijinal Boyut: {original_size} byte")
+        print(f"Sıkıştırılmış Boyut: {compressed_size} byte")
+        print(f"Sıkıştırma Oranı: {ratio:.2f}%")
+        print("\nSıkıştırılmış Veri (Backend'e gönderilecek):")
+        print(compressed)
+        print("-" * 50)
+        
+        # Test amaçlı olarak sıkıştırılmış veriyi açıp orijinalle karşılaştırma yapalım
+        decompressed = decompress_data(compressed)
+        is_same = decompressed == packet_data
+        print(f"Veri doğru şekilde açılabildi mi: {is_same}")
+        print("-" * 50)
 
     while True:
         try:
@@ -96,8 +120,8 @@ def main():
                     }
                     # print(TAB_1 + 'ICMP Packet:')
                     # print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
-                    # # print(TAB_2 + 'Data:')
-                    # # print(format_multi_line(DATA_TAB_3, data))
+                    # print(TAB_2 + 'Data:')
+                    # print(format_multi_line(DATA_TAB_3, data))
                 elif proto == 6:
                     src_port, dest_port, sequence, acknowledgement, flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin, data = tcp_segment(data)
                     packet_data['tcp_segment'] = {
@@ -119,8 +143,8 @@ def main():
                     # print(TAB_2 + 'Sequence: {}, Acknowledgement: {}'.format(sequence, acknowledgement))
                     # print(TAB_2 + 'Flags: {}')
                     # print(TAB_3 + 'URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}'.format(flag_urg ,flag_ack,flag_ack,flag_psh, flag_rst, flag_syn, flag_fin))
-                    # # print(TAB_2 + 'Data:')
-                    # # print(format_multi_line(DATA_TAB_3, data))
+                    # print(TAB_2 + 'Data:')
+                    # print(format_multi_line(DATA_TAB_3, data))
                 elif proto == 17:
                     src_port, dest_port, length, data = udp_segment(data)
                     packet_data['udp_segment'] = {
@@ -131,8 +155,8 @@ def main():
                     # print(TAB_1 + 'UDP Segment:')
                     # print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
                     # print(TAB_2 + 'Size: {}'.format(length))
-                    # # print(TAB_2 + 'Data:')
-                    # # print(format_multi_line(DATA_TAB_3, data))
+                    # print(TAB_2 + 'Data:')
+                    # print(format_multi_line(DATA_TAB_3, data))
         except Exception as e:
             print(f"Error: {e}")
             time.sleep(5)
@@ -187,77 +211,50 @@ def format_multi_line(prefix, string, size=80):
             size -= 1
     return '\n'.join([prefix + line for line in textwrap.wrap(string, size)])
 
-def parse_hex_data(hex_string):
+def compress_data(data):
     """
-    Bir hex string (\xcf\x85 formatında) alır ve binary veri olarak çevirir.
-    Örnek: '\xcf\x85\xb7' -> b'\xcf\x85\xb7'
+    JSON verisini sıkıştırır ve base64 ile encode eder.
+    
+    Args:
+        data: JSON yapısı (dict/list)
+    
+    Returns:
+        str: Base64 ile encode edilmiş sıkıştırılmış veri
     """
-    # Hex string'i temizle
-    hex_string = hex_string.replace('\\x', '')
-    hex_string = hex_string.replace('\\', '')
+    # JSON verisini string'e dönüştür
+    json_str = json.dumps(data)
     
-    # Her ikili karakteri byte'a çevir
-    binary_data = b''
-    for i in range(0, len(hex_string), 2):
-        if i+1 < len(hex_string):
-            hex_byte = hex_string[i:i+2]
-            try:
-                binary_data += bytes([int(hex_byte, 16)])
-            except ValueError:
-                pass
+    # String'i bytes'a dönüştür ve sıkıştır
+    compressed = zlib.compress(json_str.encode('utf-8'), level=9)  # En yüksek sıkıştırma
     
-    return binary_data
+    # Binary veriyi base64 ile encode et
+    b64_encoded = base64.b64encode(compressed)
+    
+    # Bytes'dan string'e dönüştür
+    return b64_encoded.decode('utf-8')
 
-def analyze_binary_data(binary_data):
+def decompress_data(compressed_data):
     """
-    Binary veriyi analiz eder ve içeriğini anlaşılır formatta gösterir.
-    """
-    try:
-        # Ethernet çerçevesini ayrıştır
-        dest_mac, src_mac, eth_proto, data = ethernet_frame(binary_data)
-        print('\nEthernet Frame:')
-        print(TAB_1 + f'Destination: {dest_mac}, Source: {src_mac}, Protocol: {eth_proto}')
-        
-        # IPv4 paketi mi kontrol et
-        if eth_proto == 8:
-            (version, header_length, ttl, proto, src, target, data) = ipv4_packet(data)
-            print(TAB_1 + 'IPv4 Packet:')
-            print(TAB_2 + f'Version: {version}, Header Length: {header_length}, TTL: {ttl}')
-            print(TAB_2 + f'Protocol: {proto}')
-            print(TAB_2 + f'Source: {src}, Target: {target}')
-            
-            # Protokol türüne göre ayrıştır
-            if proto == 1:
-                icmp_type, code, checksum, data = icmp_packet(data)
-                print(TAB_1 + 'ICMP Packet:')
-                print(TAB_2 + f'Type: {icmp_type}, Code: {code}, Checksum: {checksum}')
-                
-            elif proto == 6:
-                src_port, dest_port, sequence, acknowledgement, flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin, data = tcp_segment(data)
-                print(TAB_1 + 'TCP Segment:')
-                print(TAB_2 + f'Source Port: {src_port}, Destination Port: {dest_port}')
-                print(TAB_2 + f'Sequence: {sequence}, Acknowledgement: {acknowledgement}')
-                print(TAB_2 + 'Flags:')
-                print(TAB_3 + f'URG: {flag_urg}, ACK: {flag_ack}, PSH: {flag_psh}, RST: {flag_rst}, SYN: {flag_syn}, FIN: {flag_fin}')
-                
-            elif proto == 17:
-                src_port, dest_port, length, data = udp_segment(data)
-                print(TAB_1 + 'UDP Segment:')
-                print(TAB_2 + f'Source Port: {src_port}, Destination Port: {dest_port}')
-                print(TAB_2 + f'Size: {length}')
+    Sıkıştırılmış veriyi decode eder.
     
-    except Exception as e:
-        print(f"Veri ayrıştırma hatası: {e}")
-        print(f"Ham veri: {binary_data}")
+    Args:
+        compressed_data (str): Base64 ile encode edilmiş sıkıştırılmış veri
+    
+    Returns:
+        dict/list: Orijinal JSON yapısı
+    """
+    # String'i bytes'a dönüştür
+    b64_bytes = compressed_data.encode('utf-8')
+    
+    # Base64 decode et
+    compressed = base64.b64decode(b64_bytes)
+    
+    # Sıkıştırılmış veriyi aç
+    json_str = zlib.decompress(compressed).decode('utf-8')
+    
+    # JSON string'i parse et
+    return json.loads(json_str)
+
         
 if __name__ == "__main__":
-    # Eğer analiz edilecek hex veri varsa:
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--analyze-hex":
-            hex_data = input("Analiz edilecek hex veriyi girin (\\xcf\\x85\\xb7 formatında): ")
-            binary_data = parse_hex_data(hex_data)
-            analyze_binary_data(binary_data)
-        else:
-            main()
-    else:
-        main()
+    main()
