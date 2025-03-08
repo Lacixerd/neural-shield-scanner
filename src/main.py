@@ -67,17 +67,17 @@ if __name__ == "__main__":
                 exit()
         except Exception as e:
             print(f"License key authorization error: {e}")
-        # sniffer_thread = Thread(target=run_packet_sniffer)
-        # sniffer_thread.daemon = True
-        # sniffer_thread.start()
+        sniffer_thread = Thread(target=run_packet_sniffer)
+        sniffer_thread.daemon = True
+        sniffer_thread.start()
 
-        # ids_thread = Thread(target=run_ids)
-        # ids_thread.daemon = True
-        # ids_thread.start()
+        ids_thread = Thread(target=run_ids)
+        ids_thread.daemon = True
+        ids_thread.start()
 
-        # unusual_ip_finder_thread = Thread(target=unusual_ip_finder_main)
-        # unusual_ip_finder_thread.daemon = True
-        # unusual_ip_finder_thread.start()
+        unusual_ip_finder_thread = Thread(target=unusual_ip_finder_main)
+        unusual_ip_finder_thread.daemon = True
+        unusual_ip_finder_thread.start()
 
         run_port_scanner()
     except KeyboardInterrupt:
