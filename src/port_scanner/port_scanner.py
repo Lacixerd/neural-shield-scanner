@@ -85,7 +85,7 @@ def run_scanner():
                 # targets = list(ip_network.hosts())
                 targets = ip_discover(target_range)
 
-                url = "http://localhost:8000/apis/authorize/ip-discover-log/"
+                url = "http://localhost:8000/apis/ip-discover-log/"
 
                 headers = {
                     "Authorization": f"Token {config_file['api_token']}",
@@ -171,7 +171,7 @@ def run_scanner():
                 
                 print("\n"+"-" * 50)
                 
-            url = "http://localhost:8000/apis/authorize/network-scan/"
+            url = "http://localhost:8000/apis/network-scan/"
 
             headers = {
                 "Authorization": f"Token {config_file['api_token']}",
