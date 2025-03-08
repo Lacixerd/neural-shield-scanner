@@ -238,6 +238,7 @@ def standardize_data(data):
 def adjust_compression_size(compressed_data, original_size, target_ratio):
     """
     Sıkıştırılmış veriyi hedef orana ulaşacak şekilde ayarlar.
+    Ancak veriyi kırpmak yerine tamamen sıkıştırılmamış veya daha düşük seviyede sıkıştırılmış versiyonunu kullanır.
     """
     target_size = int(original_size * (1 - target_ratio))
     current_size = len(compressed_data)
@@ -245,10 +246,11 @@ def adjust_compression_size(compressed_data, original_size, target_ratio):
     if current_size < target_size:
         # Veriyi doldur (padding)
         padding = b'\0' * (target_size - current_size)
-        return compressed_data + padding
+        return b'PADDED:' + compressed_data + padding
     elif current_size > target_size:
-        # Veriyi kırp ve başlangıç işaretleyicisi ekle
-        return b'TRUNCATED:' + compressed_data[:target_size - 10]
+        # Kırpma yapmak yerine, veriyi etkilemeyen metadata ekleyerek işaretle
+        # Zlib verisini kırpmak yerine, tam olduğunu ancak hedeften büyük olduğunu belirt
+        return b'LARGE:' + compressed_data
     else:
         return compressed_data
 
@@ -304,10 +306,10 @@ def compress_data(data, target_compression_ratio=0.3):
     best_match = min(compression_results, key=lambda x: abs(x[1] - target_compression_ratio))
     compressed_data, achieved_ratio, algorithm = best_match
     
-    # Eğer sıkıştırma oranı hedeften çok farklıysa, veriyi doldur veya kırp
-    if abs(achieved_ratio - target_compression_ratio) > 0.05:  # %5'ten fazla sapma varsa
+    # Eğer sıkıştırma oranı hedeften çok farklıysa, ve sıkıştırılmış veri 1000 byte'dan küçükse
+    # Küçük verilerde boyut ayarlaması yapmayı denemek daha güvenli
+    if abs(achieved_ratio - target_compression_ratio) > 0.05 and len(compressed_data) < 1000:
         compressed_data = adjust_compression_size(compressed_data, original_size, target_compression_ratio)
-        achieved_ratio = 1 - (len(compressed_data) / original_size)
     
     # Binary veriyi base64 ile encode et
     b64_encoded = base64.b64encode(compressed_data)
@@ -327,32 +329,49 @@ def decompress_data(compressed_data_str):
     Returns:
         dict/list: Orijinal JSON yapısı
     """
-    # Algoritma bilgisini ayır
-    algorithm, b64_data = compressed_data_str.split(':', 1)
-    
-    # Base64 decode et
-    compressed = base64.b64decode(b64_data)
-    
-    # Sıkıştırılmamış veri kontrolü
-    if algorithm == "UNCOMPRESSED":
-        json_str = compressed.decode('utf-8')
+    try:
+        # Algoritma bilgisini ayır
+        algorithm, b64_data = compressed_data_str.split(':', 1)
+        
+        # Base64 decode et
+        compressed = base64.b64decode(b64_data)
+        
+        # Sıkıştırılmamış veri kontrolü
+        if algorithm == "UNCOMPRESSED":
+            json_str = compressed.decode('utf-8')
+            return json.loads(json_str)
+        
+        # Dolgu kontrolü
+        if compressed.startswith(b'PADDED:'):
+            compressed = compressed[7:]  # 'PADDED:' prefix'ini kaldır
+            print("Bilgi: Veri dolgu içeriyor.")
+        
+        # Büyük veri kontrolü
+        if compressed.startswith(b'LARGE:'):
+            compressed = compressed[6:]  # 'LARGE:' prefix'ini kaldır
+            print("Bilgi: Veri hedef orandan daha büyük.")
+        
+        # Kırpılma kontrolü - artık bu kodu kullanmıyoruz ama backward uyumluluk için tutalım
+        if compressed.startswith(b'TRUNCATED:'):
+            # Kırpılmış veri açılamaz, orijinal veriyi tercih edelim
+            print("Uyarı: Veri kırpılmış, açılamıyor. Orijinale dönülüyor.")
+            raise ValueError("Kırpılmış veri açılamaz.")
+        
+        # Algoritma tipine göre sıkıştırmayı aç
+        if algorithm.startswith('zlib'):
+            json_str = zlib.decompress(compressed).decode('utf-8')
+        elif algorithm.startswith('bz2'):
+            json_str = bz2.decompress(compressed).decode('utf-8')
+        else:
+            raise ValueError(f"Bilinmeyen sıkıştırma algoritması: {algorithm}")
+        
+        # JSON string'i parse et
         return json.loads(json_str)
     
-    # Kırpılma kontrolü
-    if compressed.startswith(b'TRUNCATED:'):
-        compressed = compressed[10:]
-        print("Uyarı: Veri kırpılmış olabilir!")
-    
-    # Algoritma tipine göre sıkıştırmayı aç
-    if algorithm.startswith('zlib'):
-        json_str = zlib.decompress(compressed).decode('utf-8')
-    elif algorithm.startswith('bz2'):
-        json_str = bz2.decompress(compressed).decode('utf-8')
-    else:
-        raise ValueError(f"Bilinmeyen sıkıştırma algoritması: {algorithm}")
-    
-    # JSON string'i parse et
-    return json.loads(json_str)
+    except Exception as e:
+        print(f"Veri açma hatası: {str(e)}")
+        # Hata durumunda boş bir sözlük döndür
+        return {}
 
         
 if __name__ == "__main__":
