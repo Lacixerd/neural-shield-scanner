@@ -5,6 +5,7 @@ from unusual_ip_finder.unusual_ip_finder import main as unusual_ip_finder_main
 import time
 from threading import Thread
 import json
+import requests
 
 with open('config.json', 'r') as f:
     config = json.load(f)
@@ -49,17 +50,34 @@ if __name__ == "__main__":
         if config['license_key'] == "":
             print("License key not found in config.json")
             exit()
-        sniffer_thread = Thread(target=run_packet_sniffer)
-        sniffer_thread.daemon = True
-        sniffer_thread.start()
+        url = "http://localhost:8000/apis/authorize-license-key/"
+        headers = {
+            "Authorization": f"Token {config['api_token']}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "license_key": config['license_key']
+        }
+        try:
+            response = requests.post(url, headers=headers, json=payload)
+            if response.status_code == 200:
+                print("License key authorized successfully.")
+            else:
+                print(f"License key authorization failed: {response.status_code}")
+                exit()
+        except Exception as e:
+            print(f"License key authorization error: {e}")
+        # sniffer_thread = Thread(target=run_packet_sniffer)
+        # sniffer_thread.daemon = True
+        # sniffer_thread.start()
 
-        ids_thread = Thread(target=run_ids)
-        ids_thread.daemon = True
-        ids_thread.start()
+        # ids_thread = Thread(target=run_ids)
+        # ids_thread.daemon = True
+        # ids_thread.start()
 
-        unusual_ip_finder_thread = Thread(target=unusual_ip_finder_main)
-        unusual_ip_finder_thread.daemon = True
-        unusual_ip_finder_thread.start()
+        # unusual_ip_finder_thread = Thread(target=unusual_ip_finder_main)
+        # unusual_ip_finder_thread.daemon = True
+        # unusual_ip_finder_thread.start()
 
         run_port_scanner()
     except KeyboardInterrupt:
