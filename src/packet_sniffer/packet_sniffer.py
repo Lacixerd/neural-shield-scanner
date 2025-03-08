@@ -16,6 +16,7 @@ import time
 import sys
 import zlib
 import base64
+import bz2
 
 TAB_1 = '\t - '
 TAB_2 = '\t\t - '
@@ -211,46 +212,104 @@ def format_multi_line(prefix, string, size=80):
             size -= 1
     return '\n'.join([prefix + line for line in textwrap.wrap(string, size)])
 
-def compress_data(data):
+def compress_data(data, target_compression_ratio=0.3):
     """
-    JSON verisini sıkıştırır ve base64 ile encode eder.
+    JSON verisini hedeflenen sıkıştırma oranına göre sıkıştırır.
+    Eğer sıkıştırılmış veri orijinalden büyükse orijinal veriyi kullanır.
     
     Args:
         data: JSON yapısı (dict/list)
+        target_compression_ratio: Hedeflenen sıkıştırma oranı (0.3 = %30)
     
     Returns:
         str: Base64 ile encode edilmiş sıkıştırılmış veri
     """
     # JSON verisini string'e dönüştür
     json_str = json.dumps(data)
+    original_size = len(json_str)
     
-    # String'i bytes'a dönüştür ve sıkıştır
-    compressed = zlib.compress(json_str.encode('utf-8'), level=9)  # En yüksek sıkıştırma
+    # Çok küçük veriler için sıkıştırma yapmamak daha etkilidir (< 100 byte)
+    if original_size < 100:
+        return f"UNCOMPRESSED:{base64.b64encode(json_str.encode('utf-8')).decode('utf-8')}"
+    
+    # Veriyi normalize et
+    formatted_data = standardize_data(data)
+    json_str = json.dumps(formatted_data)
+    
+    # Farklı sıkıştırma algoritmalarını dene
+    compression_results = []
+    
+    # zlib ile sıkıştırma dene
+    for level in [1, 5, 9]:
+        compressed = zlib.compress(json_str.encode('utf-8'), level=level)
+        ratio = len(compressed) / original_size
+        # Eğer sıkıştırılmış veri orijinalden küçükse
+        if ratio < 1.0:
+            compression_results.append((compressed, 1 - ratio, f"zlib-{level}"))
+    
+    # bz2 ile sıkıştırma dene
+    for level in [1, 5, 9]:
+        compressed = bz2.compress(json_str.encode('utf-8'), compresslevel=level)
+        ratio = len(compressed) / original_size
+        # Eğer sıkıştırılmış veri orijinalden küçükse
+        if ratio < 1.0:
+            compression_results.append((compressed, 1 - ratio, f"bz2-{level}"))
+    
+    # Hiçbir algoritma verinin boyutunu küçültmediyse
+    if not compression_results:
+        # Sıkıştırma yapmadan orijinal veriyi encode et
+        return f"UNCOMPRESSED:{base64.b64encode(json_str.encode('utf-8')).decode('utf-8')}"
+    
+    # Hedef orana en yakın sonucu bul
+    best_match = min(compression_results, key=lambda x: abs(x[1] - target_compression_ratio))
+    compressed_data, achieved_ratio, algorithm = best_match
+    
+    # Eğer sıkıştırma oranı hedeften çok farklıysa, veriyi doldur veya kırp
+    if abs(achieved_ratio - target_compression_ratio) > 0.05:  # %5'ten fazla sapma varsa
+        compressed_data = adjust_compression_size(compressed_data, original_size, target_compression_ratio)
+        achieved_ratio = 1 - (len(compressed_data) / original_size)
     
     # Binary veriyi base64 ile encode et
-    b64_encoded = base64.b64encode(compressed)
+    b64_encoded = base64.b64encode(compressed_data)
     
-    # Bytes'dan string'e dönüştür
-    return b64_encoded.decode('utf-8')
+    # Kullanılan algoritma bilgisini başa ekle
+    result = f"{algorithm}:{b64_encoded.decode('utf-8')}"
+    
+    return result
 
-def decompress_data(compressed_data):
+def decompress_data(compressed_data_str):
     """
     Sıkıştırılmış veriyi decode eder.
     
     Args:
-        compressed_data (str): Base64 ile encode edilmiş sıkıştırılmış veri
+        compressed_data_str (str): Algoritma bilgisi ile birlikte encode edilmiş veri
     
     Returns:
         dict/list: Orijinal JSON yapısı
     """
-    # String'i bytes'a dönüştür
-    b64_bytes = compressed_data.encode('utf-8')
+    # Algoritma bilgisini ayır
+    algorithm, b64_data = compressed_data_str.split(':', 1)
     
     # Base64 decode et
-    compressed = base64.b64decode(b64_bytes)
+    compressed = base64.b64decode(b64_data)
     
-    # Sıkıştırılmış veriyi aç
-    json_str = zlib.decompress(compressed).decode('utf-8')
+    # Sıkıştırılmamış veri kontrolü
+    if algorithm == "UNCOMPRESSED":
+        json_str = compressed.decode('utf-8')
+        return json.loads(json_str)
+    
+    # Kırpılma kontrolü
+    if compressed.startswith(b'TRUNCATED:'):
+        compressed = compressed[10:]
+        print("Uyarı: Veri kırpılmış olabilir!")
+    
+    # Algoritma tipine göre sıkıştırmayı aç
+    if algorithm.startswith('zlib'):
+        json_str = zlib.decompress(compressed).decode('utf-8')
+    elif algorithm.startswith('bz2'):
+        json_str = bz2.decompress(compressed).decode('utf-8')
+    else:
+        raise ValueError(f"Bilinmeyen sıkıştırma algoritması: {algorithm}")
     
     # JSON string'i parse et
     return json.loads(json_str)
