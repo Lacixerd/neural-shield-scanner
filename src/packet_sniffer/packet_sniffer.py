@@ -212,6 +212,46 @@ def format_multi_line(prefix, string, size=80):
             size -= 1
     return '\n'.join([prefix + line for line in textwrap.wrap(string, size)])
 
+def standardize_data(data):
+    """
+    Veri yapısını standartlaştırarak daha iyi sıkıştırma oranı sağlar.
+    """
+    if isinstance(data, dict):
+        # Standart bir veri yapısı kullan
+        new_data = {}
+        for key, value in data.items():
+            # Zaman damgası formatını standartlaştır
+            if key == 'timestamp' and isinstance(value, str):
+                new_data[key] = value[:19]  # YYYY-MM-DD HH:MM:SS formatına kırp
+            # MAC adreslerini standartlaştır
+            elif 'mac' in key.lower() and isinstance(value, str):
+                new_data[key] = value.upper()
+            # Diğer değerleri recursive olarak standartlaştır
+            else:
+                new_data[key] = standardize_data(value)
+        return new_data
+    elif isinstance(data, list):
+        return [standardize_data(item) for item in data]
+    else:
+        return data
+
+def adjust_compression_size(compressed_data, original_size, target_ratio):
+    """
+    Sıkıştırılmış veriyi hedef orana ulaşacak şekilde ayarlar.
+    """
+    target_size = int(original_size * (1 - target_ratio))
+    current_size = len(compressed_data)
+    
+    if current_size < target_size:
+        # Veriyi doldur (padding)
+        padding = b'\0' * (target_size - current_size)
+        return compressed_data + padding
+    elif current_size > target_size:
+        # Veriyi kırp ve başlangıç işaretleyicisi ekle
+        return b'TRUNCATED:' + compressed_data[:target_size - 10]
+    else:
+        return compressed_data
+
 def compress_data(data, target_compression_ratio=0.3):
     """
     JSON verisini hedeflenen sıkıştırma oranına göre sıkıştırır.
