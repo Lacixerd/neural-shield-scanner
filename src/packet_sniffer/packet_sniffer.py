@@ -97,7 +97,7 @@ def main():
                     print(TAB_1 + 'ICMP Packet:')
                     print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
                     print(TAB_2 + 'Data:')
-                    print(DATA_TAB_3, data)
+                    print(DATA_TAB_3 + data)
                 elif proto == 6:
                     src_port, dest_port, sequence, acknowledgement, flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin, data = tcp_segment(data)
                     packet_data['tcp_segment'] = {
@@ -120,7 +120,7 @@ def main():
                     print(TAB_2 + 'Flags: {}')
                     print(TAB_3 + 'URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}'.format(flag_urg ,flag_ack,flag_ack,flag_psh, flag_rst, flag_syn, flag_fin))
                     print(TAB_2 + 'Data:')
-                    print(DATA_TAB_3, data)
+                    print(format_multi_line(DATA_TAB_3, data))
                 elif proto == 17:
                     src_port, dest_port, length, data = udp_segment(data)
                     packet_data['udp_segment'] = {
@@ -132,7 +132,7 @@ def main():
                     print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
                     print(TAB_2 + 'Size: {}'.format(length))
                     print(TAB_2 + 'Data:')
-                    print(DATA_TAB_3, data)
+                    print(format_multi_line(DATA_TAB_3, data))
         except Exception as e:
             print(f"Error: {e}")
             time.sleep(5)
@@ -178,6 +178,59 @@ def tcp_segment(data):
 def udp_segment(data):
     src_port, dest_port, size = struct.unpack('! H H 2x H', data[:8])
     return src_port, dest_port, size, data[8:]
+
+def format_multi_line(prefix, string, size=80):
+    """
+    Veriyi hem hex dump hem de ASCII formatında gösterir.
+    
+    Args:
+        prefix: Her satırın başına eklenecek metin
+        string: Formatlanacak bytes veya string verisi
+        size: Her satırın maksimum uzunluğu
         
+    Returns:
+        Formatlanmış veri metni
+    """
+    if isinstance(string, bytes):
+        # HEX ve ASCII formatını birlikte göster
+        result = []
+        for offset in range(0, len(string), 16):
+            # Satır başında hex offset'i göster
+            hex_offset = f"{offset:04x}"
+            line = f"{hex_offset}  "
+            
+            # 16 byte'lık bir blok al
+            chunk = string[offset:offset+16]
+            
+            # Hex formatını oluştur (8'li gruplar halinde)
+            hex_line = ""
+            for i, b in enumerate(chunk):
+                if i == 8:  # 8. byte'tan sonra ekstra boşluk ekle
+                    hex_line += " "
+                hex_line += f"{b:02x} "
+            
+            # Hex satırını tamamla (eksik byte'lar için boşluk)
+            hex_line = hex_line.ljust(49, ' ')  # 16 byte için 3 karakter/byte + ekstra boşluk
+            line += hex_line
+            
+            # ASCII kısmını ekle
+            ascii_part = ""
+            for b in chunk:
+                if 32 <= b <= 126:  # Yazdırılabilir ASCII karakterler
+                    ascii_part += chr(b)
+                else:
+                    ascii_part += "."  # Yazdırılamayan karakterler için nokta
+            
+            # Her satırı birleştir
+            line += ascii_part
+            result.append(prefix + line)
+        
+        return "\n".join(result)
+    else:
+        # Eğer bytes değilse normal text wrap kullan
+        string_str = str(string)
+        size -= len(prefix)
+        return '\n'.join([prefix + line for line in textwrap.wrap(string_str, size)])
+
 if __name__ == "__main__":
     main()
