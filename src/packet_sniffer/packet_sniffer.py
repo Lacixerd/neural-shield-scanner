@@ -97,7 +97,7 @@ def main():
                     print(TAB_1 + 'ICMP Packet:')
                     print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
                     print(TAB_2 + 'Data:')
-                    print(format_multi_line(DATA_TAB_3, data))
+                    print(DATA_TAB_3, data)
                 elif proto == 6:
                     src_port, dest_port, sequence, acknowledgement, flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin, data = tcp_segment(data)
                     packet_data['tcp_segment'] = {
@@ -120,7 +120,7 @@ def main():
                     print(TAB_2 + 'Flags: {}')
                     print(TAB_3 + 'URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}'.format(flag_urg ,flag_ack,flag_ack,flag_psh, flag_rst, flag_syn, flag_fin))
                     print(TAB_2 + 'Data:')
-                    print(format_multi_line(DATA_TAB_3, data))
+                    print(DATA_TAB_3, data)
                 elif proto == 17:
                     src_port, dest_port, length, data = udp_segment(data)
                     packet_data['udp_segment'] = {
@@ -132,7 +132,7 @@ def main():
                     print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
                     print(TAB_2 + 'Size: {}'.format(length))
                     print(TAB_2 + 'Data:')
-                    print(format_multi_line(DATA_TAB_3, data))
+                    print(DATA_TAB_3, data)
         except Exception as e:
             print(f"Error: {e}")
             time.sleep(5)
@@ -178,15 +178,6 @@ def tcp_segment(data):
 def udp_segment(data):
     src_port, dest_port, size = struct.unpack('! H H 2x H', data[:8])
     return src_port, dest_port, size, data[8:]
-
-def format_multi_line(prefix, string, size=80):
-    size -= len(prefix)
-    if isinstance(string, bytes):
-        string = ''.join(r'\x{:02x}'.format(byte) for byte in string)
-        if size % 2:
-            size -= 1
-    return '\n'.join([prefix + line for line in textwrap.wrap(string, size)])
-
         
 if __name__ == "__main__":
     main()
