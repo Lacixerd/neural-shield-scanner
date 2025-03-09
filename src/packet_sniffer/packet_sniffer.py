@@ -2,7 +2,7 @@
 Bu Kod MacOs Cihazlarda çalışmaz çünkü AF_PACKET soket türü Macos Cihazlarda desteklenmiyor. 
 Kod öalıştırılacaksa Linux cihazlarda çalışır anca.
 
-Packet Sniffer loglarının yazıldığı dosya: logs/packet_sniffer_logs/sniffer_logs.json
+Packet Sniffer loglarının yazıldığı dosya: logs/packet_sniffer_logs/sniffer_logs_<timestamp>.json
 Eğer terminalde gözükmesini istiyorsan printlerin başındaki commentleri kaldır ve sadece bu dosyayı çalıştır
 """
 
@@ -14,6 +14,8 @@ from datetime import datetime
 import os
 import time
 import sys
+import threading
+import queue
 
 TAB_1 = '\t - '
 TAB_2 = '\t\t - '
@@ -25,32 +27,109 @@ DATA_TAB_2 = '\t\t '
 DATA_TAB_3 = '\t\t\t '
 DATA_TAB_4 = '\t\t\t\t '
 
+# Log rotasyonu için global değişkenler
+LOG_ROTATION_INTERVAL = 120  # saniye (2 dakika)
+log_queue = queue.Queue()
+current_log_file = None
+last_rotation_time = 0
+log_writer_lock = threading.Lock()
+
 def is_scanner_running():
     return os.path.exists("scanner_running.signal")
 
+def get_log_filename():
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f'logs/packet_sniffer_logs/sniffer_logs_{timestamp}.json'
+
+def initialize_log_file(filename):
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    with open(filename, 'w') as f:
+        json.dump([], f)
+    return filename
+
+def log_writer_thread():
+    global current_log_file, last_rotation_time
+    
+    current_log_file = initialize_log_file(get_log_filename())
+    last_rotation_time = time.time()
+    log_data = []
+    
+    while True:
+        try:
+            # En fazla 1 saniye bekle, böylece düzenli olarak rotasyon kontrolü yapılabilir
+            packet = log_queue.get(timeout=1)
+            log_data.append(packet)
+            
+            # Şu anki zaman
+            current_time = time.time()
+            
+            # Log dosyasını periyodik olarak yaz ve gerekirse rotasyon yap
+            if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL or len(log_data) >= 1000:
+                with log_writer_lock:
+                    # Mevcut logları dosyaya yaz
+                    with open(current_log_file, 'r') as f:
+                        try:
+                            existing_data = json.load(f)
+                        except json.JSONDecodeError:
+                            existing_data = []
+                    
+                    # Mevcut dosyaya logları ekle
+                    existing_data.extend(log_data)
+                    
+                    # Atomik yazma için geçici dosya kullan
+                    temp_file = f"{current_log_file}.tmp"
+                    with open(temp_file, 'w') as f:
+                        json.dump(existing_data, f, indent=2)
+                    
+                    # Geçici dosyayı asıl dosyaya taşı
+                    os.replace(temp_file, current_log_file)
+                    
+                    # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur
+                    if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
+                        current_log_file = initialize_log_file(get_log_filename())
+                        last_rotation_time = current_time
+                    
+                    # Log listesini temizle
+                    log_data = []
+            
+            log_queue.task_done()
+            
+        except queue.Empty:
+            # Timeout olduğunda, elimizdeki logları yaz
+            if log_data:
+                with log_writer_lock:
+                    with open(current_log_file, 'r') as f:
+                        try:
+                            existing_data = json.load(f)
+                        except json.JSONDecodeError:
+                            existing_data = []
+                    
+                    existing_data.extend(log_data)
+                    
+                    temp_file = f"{current_log_file}.tmp"
+                    with open(temp_file, 'w') as f:
+                        json.dump(existing_data, f, indent=2)
+                    
+                    os.replace(temp_file, current_log_file)
+                    log_data = []
+        
+        except Exception as e:
+            print(f"Log yazarken hata: {e}")
+            time.sleep(1)
+
 def main():
+    # Log writer thread'ini başlat
+    log_thread = threading.Thread(target=log_writer_thread, daemon=True)
+    log_thread.start()
+    
     conn = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
 
     def write_to_json(packet_data):
         if is_scanner_running():
             return
-            
-        file_path = 'logs/packet_sniffer_logs/sniffer_logs.json'
         
-        if not os.path.exists(file_path):
-            with open(file_path, 'w') as f:
-                json.dump([], f)
-        
-        with open(file_path, 'r') as f:
-            try:
-                existing_data = json.load(f)
-            except json.JSONDecodeError:
-                existing_data = []
-        
-        existing_data.append(packet_data)
-        
-        with open(file_path, 'w') as f:
-            json.dump(existing_data, f, indent=2)
+        # Paketi kuyruğa ekle
+        log_queue.put(packet_data)
 
     while True:
         try:
