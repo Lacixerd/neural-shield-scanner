@@ -10,7 +10,15 @@ import json
 import os
 import requests
 
-with open("config.json", "r") as f:
+
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+config_path = os.path.join(BASE_DIR, 'config.json')
+
+with open(config_path, "r") as f:
     config_file = json.load(f)
 
 def log_message(packet_data):
@@ -32,9 +40,13 @@ def log_message(packet_data):
         if response.status_code == 201:
             print("Network Scan log saved successfully.")
         else:
-            print(f"Network Scan log save failed: {response.status_code}\n{response.text}")
+            print(f"Network Scan log save failed: {response.status_code}\nError: {response.text}")
+            print("Exiting...")
+            sys.exit()
     except Exception as e:
         print(f"Network Scan log save error: {e}")
+        print("Exiting...")
+        sys.exit()
 
 
 def scan_port(target_port: Tuple[str, int]) -> Tuple[int, bool, str]:
@@ -64,7 +76,7 @@ def scan_port(target_port: Tuple[str, int]) -> Tuple[int, bool, str]:
 
 def run_scanner():
     try:
-        with open("scanner_running.signal", "w") as f:
+        with open(f"{BASE_DIR}/scanner_running.signal", "w") as f:
             f.write("1")
     except Exception as e:
         print(f"Scanner Running Signal Error: {e}")
@@ -112,13 +124,17 @@ def run_scanner():
                 if response.status_code == 201:
                     print("IP Discovery Success")
                 else:
-                    print(f"IP Discovery Failed: {response.status_code}")
+                    print(f"IP Discovery Failed: {response.status_code}\nError: {response.text}")
+                    print("Exiting...")
+                    sys.exit()
             
             except ValueError:
                 print("Invalid IP range format. Please use CIDR notation (example: 192.168.1.0/24)")
+                print("Exiting...")
                 sys.exit()
             except Exception as e:
                 print(f"IP Discovery Error: {e}")
+                print("Exiting...")
                 sys.exit()
 
         # print("-" * 50)
@@ -186,20 +202,20 @@ def run_scanner():
     except KeyboardInterrupt:
         print("\nExiting program.")
         try:
-            os.remove("scanner_running.signal")
+            os.remove(f"{BASE_DIR}/scanner_running.signal")
         except:
             pass
         sys.exit()
     except socket.error:
         print("\nCould not connect to the target IP")
         try:
-            os.remove("scanner_running.signal")
+            os.remove(f"{BASE_DIR}/scanner_running.signal")
         except:
             pass
         sys.exit()
 
     try:
-        os.remove("scanner_running.signal")
+        os.remove(f"{BASE_DIR}/scanner_running.signal")
     except:
         pass
 
