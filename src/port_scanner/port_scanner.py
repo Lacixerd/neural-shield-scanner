@@ -39,39 +39,28 @@ def log_message(packet_data):
 
 def scan_port(target_port: Tuple[str, int]) -> Tuple[int, bool, str]:
     target, port = target_port
-    for attempt in range(3):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket.setdefaulttimeout(0.5)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        result = s.connect_ex((target, port))
+        
+        if result == 0:
+            try:
+                service = socket.getservbyport(port, 'tcp')
+                s.close()
+                return port, True, service
+            except:
+                s.close()
+                return port, True, "unknown"
+        s.close()
+        return port, False, None
+    except (socket.timeout, socket.gaierror, socket.error) as e:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            socket.setdefaulttimeout(2.0)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            result = s.connect_ex((target, port))
-            
-            if result == 0:
-                try:
-                    service = socket.getservbyport(port, 'tcp')
-                    s.close()
-                    return port, True, service
-                except:
-                    s.close()
-                    return port, True, "unknown"
             s.close()
-            if attempt < 2:
-                continue
-            return port, False, None
-        except socket.timeout:
-            try:
-                s.close()
-            except:
-                pass
-            if attempt < 2:
-                continue
-        except (socket.gaierror, socket.error) as e:
-            try:
-                s.close()
-            except:
-                pass
-            return port, False, None
-    return port, False, None
+        except:
+            pass
+        return port, False, None
 
 def run_scanner():
     try:
@@ -82,8 +71,8 @@ def run_scanner():
         return
     
     try:
-        MAX_WORKERS = min(config_file["scanner"]["thread_count"], 50)
-        BATCH_SIZE = min(config_file["scanner"]["batch_size"], 100)
+        MAX_WORKERS = min(config_file["scanner"]["thread_count"], 100)
+        BATCH_SIZE = min(config_file["scanner"]["batch_size"], 200)
         
         scan_type = str(config_file["scanner"]["scan_type"])
 
