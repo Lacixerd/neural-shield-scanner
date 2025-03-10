@@ -1,7 +1,7 @@
 {
     "scanner" : {
         "scan_type" : "range",
-        "port_range_type" : "popular",
+        "port_range_type" : "default",
         "target" : "192.168.1.9",
         "target_range" : "192.168.1.0/24",
         "thread_count" : 50,
@@ -13,9 +13,7 @@
         "time_window" : 5,
         "ids_log": "config"
     },
-    "unusual_ip_finder" : {
-        "scan_interval" : 60
-    },
-    "license_key" : "8ab95e4bd62d2b04dacc2eddc1060fa8",
-    "api_token" : "82a320239ebab2408ecac57ea8b599dd93fcf695"
+    "license_key" : "5b79b27e840cca8647513c9d04ffb99d",
+    "api_token" : "0392cc255d958a23e08ddc2df2eab5aad70a377f",
+    "api_url" : "https://neuralshieldai.com/apis/"
 }
