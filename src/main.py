@@ -5,8 +5,17 @@ import time
 from threading import Thread
 import json
 import requests
+import sys
+import os
 
-with open('config.json', 'r') as f:
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+config_path = os.path.join(BASE_DIR, 'config.json')
+
+with open(config_path, 'r') as f:
     config = json.load(f)
 
 def run_packet_sniffer():
@@ -62,10 +71,11 @@ if __name__ == "__main__":
             if response.status_code == 200:
                 print("License key authorized successfully.")
             else:
-                print(f"License key authorization failed: {response.status_code}")
+                print(f"License key authorization failed: {response.status_code}\nError: {response.text}")
                 exit()
         except Exception as e:
             print(f"License key authorization error: {e}")
+            exit()
         # sniffer_thread = Thread(target=run_packet_sniffer)
         # sniffer_thread.daemon = True
         # sniffer_thread.start()
