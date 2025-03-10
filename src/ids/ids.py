@@ -11,7 +11,14 @@ import json
 from datetime import datetime
 import requests
 
-with open('config.json', 'r') as f:
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+config_path = os.path.join(BASE_DIR, 'config.json')
+
+with open(config_path, 'r') as f:
     config = json.load(f)
 
 def write_to_json(packet_data):
@@ -51,9 +58,13 @@ def log_message(packet_data):
         if response.status_code == 201:
             print("IDS log saved successfully.")
         else:
-            print(f"IDS log save failed: {response.status_code}\n{response.text}")
+            print(f"IDS log save failed: {response.status_code}\nError: {response.text}")
+            print("Exiting...")
+            sys.exit()
     except Exception as e:
-        print(f"IDS log save error: {e}\n{response.text}")
+        print(f"IDS log save error: {e}")
+        print("Exiting...")
+        sys.exit()
 
 class IntrusionDetectionSystem:
     def __init__(self, syn_threshold=20, scan_threshold=15, time_window=5):
@@ -70,7 +81,7 @@ class IntrusionDetectionSystem:
         self.detected_port_scans = {}  # Port taraması tespit edilen IP'leri izlemek için
 
     def packet_callback(self, packet):
-        if os.path.exists("scanner_running.signal"):
+        if os.path.exists(f"{BASE_DIR}/scanner_running.signal"):
             return
 
         if not packet.haslayer(IP) or not packet.haslayer(TCP):
