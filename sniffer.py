@@ -117,6 +117,9 @@ def log_writer_thread():
                     
                     # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur
                     if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
+                        if not is_scanner_running() and existing_data:
+                            print(f"2 dakikalık süre doldu. {len(existing_data)} paket verisi API'ye gönderiliyor...")
+                            log_message(existing_data)
                         current_log_file = initialize_log_file(get_log_filename())
                         last_rotation_time = current_time
                     
