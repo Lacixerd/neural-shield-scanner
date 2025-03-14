@@ -39,7 +39,7 @@ with open('config.json', 'r') as f:
 
 def log_message(packet_data):
     try:
-        url = config_file['api_url'] + "network-scan/"
+        url = config_file['api_url'] + "sniffer-log/"
 
         headers = {
             "Authorization": f"Token {config_file['api_token']}",
@@ -100,6 +100,7 @@ def log_writer_thread():
                     with open(current_log_file, 'r') as f:
                         try:
                             existing_data = json.load(f)
+                            log_message(existing_data)
                         except json.JSONDecodeError:
                             existing_data = []
                     
@@ -114,13 +115,8 @@ def log_writer_thread():
                     # Geçici dosyayı asıl dosyaya taşı
                     os.replace(temp_file, current_log_file)
                     
-                    # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur ve logları API'ye gönder
+                    # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur
                     if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
-                        # API'ye tüm logları gönder
-                        if not is_scanner_running() and existing_data:
-                            log_message(existing_data)
-                            
-                        # Yeni log dosyası oluştur
                         current_log_file = initialize_log_file(get_log_filename())
                         last_rotation_time = current_time
                     
