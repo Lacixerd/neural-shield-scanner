@@ -78,9 +78,8 @@ def initialize_log_file(filename):
     return filename
 
 def log_writer_thread():
-    global current_log_file, last_rotation_time
+    global last_rotation_time
     
-    current_log_file = initialize_log_file(get_log_filename())
     last_rotation_time = time.time()
     log_data = []
     
@@ -93,37 +92,16 @@ def log_writer_thread():
             # Şu anki zaman
             current_time = time.time()
             
-            # Log dosyasını periyodik olarak yaz ve gerekirse rotasyon yap
+            # Periyodik olarak kontrol et ve gerekirse logları API'ye gönder
             if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL or len(log_data) >= 1000:
                 with log_writer_lock:
-                    # Mevcut logları dosyaya yaz
-                    with open(current_log_file, 'r') as f:
-                        try:
-                            existing_data = json.load(f)
-                        except json.JSONDecodeError:
-                            existing_data = []
-                    
-                    # Mevcut dosyaya logları ekle
-                    existing_data.extend(log_data)
-                    
-                    # Atomik yazma için geçici dosya kullan
-                    temp_file = f"{current_log_file}.tmp"
-                    with open(temp_file, 'w') as f:
-                        json.dump(existing_data, f, indent=2)
-                    
-                    # Geçici dosyayı asıl dosyaya taşı
-                    os.replace(temp_file, current_log_file)
-                    
-                    # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur ve logları API'ye gönder
+                    # Eğer 2 dakika geçtiyse, logları API'ye gönder
                     if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
                         # API'ye tüm logları gönder
-                        if not is_scanner_running() and existing_data:
-                            print(f"2 dakikalık süre doldu. {len(existing_data)} paket verisi API'ye gönderiliyor...")
-                            log_message(existing_data)
-                            
-                        # Yeni log dosyası oluştur
-                        current_log_file = initialize_log_file(get_log_filename())
-                        last_rotation_time = current_time
+                        if not is_scanner_running() and log_data:
+                            print(f"2 dakikalık süre doldu. {len(log_data)} paket verisi API'ye gönderiliyor...")
+                            log_message(log_data)
+                            last_rotation_time = current_time
                     
                     # Log listesini temizle
                     log_data = []
@@ -131,22 +109,12 @@ def log_writer_thread():
             log_queue.task_done()
             
         except queue.Empty:
-            # Timeout olduğunda, elimizdeki logları yaz
+            # Timeout olduğunda, elimizdeki logları gönder
             if log_data:
                 with log_writer_lock:
-                    with open(current_log_file, 'r') as f:
-                        try:
-                            existing_data = json.load(f)
-                        except json.JSONDecodeError:
-                            existing_data = []
-                    
-                    existing_data.extend(log_data)
-                    
-                    temp_file = f"{current_log_file}.tmp"
-                    with open(temp_file, 'w') as f:
-                        json.dump(existing_data, f, indent=2)
-                    
-                    os.replace(temp_file, current_log_file)
+                    if not is_scanner_running():
+                        print(f"Bekleyen {len(log_data)} paket verisi API'ye gönderiliyor...")
+                        log_message(log_data)
                     log_data = []
         
         except Exception as e:
