@@ -2,7 +2,8 @@
 Bu Kod MacOs Cihazlarda çalışmaz çünkü AF_PACKET soket türü Macos Cihazlarda desteklenmiyor. 
 Kod öalıştırılacaksa Linux cihazlarda çalışır anca.
 
-Artık loglar 2 dakikada bir API'ye gönderiliyor
+Packet Sniffer loglarının yazıldığı dosya: logs/packet_sniffer_logs/sniffer_logs_<timestamp>.json
+Eğer terminalde gözükmesini istiyorsan printlerin başındaki commentleri kaldır ve sadece bu dosyayı çalıştır
 """
 
 import socket
@@ -16,7 +17,6 @@ import sys
 import threading
 import queue
 import requests
-
 TAB_1 = '\t - '
 TAB_2 = '\t\t - '
 TAB_3 = '\t\t\t - '
@@ -30,190 +30,137 @@ DATA_TAB_4 = '\t\t\t\t '
 # Log rotasyonu için global değişkenler
 LOG_ROTATION_INTERVAL = 120  # saniye (2 dakika)
 log_queue = queue.Queue()
+current_log_file = None
+last_rotation_time = 0
 log_writer_lock = threading.Lock()
 
-# API yapılandırması
-config = None
+with open('config.json', 'r') as f:
+    config_file = json.load(f)
 
-def load_config():
-    """Config dosyasını yükler"""
-    global config
+def log_message(packet_data):
     try:
-        with open('config.json', 'r') as f:
-            config = json.load(f)
-        print("Config dosyası başarıyla yüklendi:")
-        print(f"API URL: {config['api_url']}")
-        print(f"API Token: {config['api_token'][:8]}...")
-        print(f"License Key: {config['license_key'][:8]}...")
-    except FileNotFoundError:
-        print("Config dosyası bulunamadı. Doğru dizinde olduğunuzdan emin olun.")
-        sys.exit(1)
-    except json.JSONDecodeError:
-        print("Config dosyası geçerli bir JSON formatında değil.")
-        sys.exit(1)
+        url = config_file['api_url'] + "network-scan/"
+
+        headers = {
+            "Authorization": f"Token {config_file['api_token']}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "license_key": config_file['license_key'],
+            "results": [packet_data]
+        }
+
+        response = requests.post(url, headers=headers, json=payload)
+
+        if response.status_code == 201:
+            print("Network Scan log saved successfully.")
+        else:
+            print(f"Network Scan log save failed: {response.status_code}\nError: {response.text}")
+            print("Exiting...")
+            sys.exit()
     except Exception as e:
-        print(f"Config yüklenirken hata oluştu: {e}")
-        sys.exit(1)
+        print(f"Network Scan log save error: {e}")
+        print("Exiting...")
+        sys.exit()
 
 def is_scanner_running():
     return os.path.exists("scanner_running.signal")
 
-def binary_to_hex(data):
-    """Binary verileri hex string formatına dönüştürür"""
-    if isinstance(data, bytes):
-        return data.hex()
-    return data
+def get_log_filename():
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f'logs/packet_sniffer_logs/sniffer_logs_{timestamp}.json'
 
-def sanitize_packet_data(packet_data):
-    """Paket verisini API'ye gönderilebilir hale getirir, binary verileri dönüştürür"""
-    sanitized = {}
-    
-    for key, value in packet_data.items():
-        if isinstance(value, dict):
-            sanitized[key] = sanitize_packet_data(value)
-        elif isinstance(value, bytes):
-            sanitized[key] = binary_to_hex(value)
-        elif isinstance(value, (int, float, str, bool, type(None))):
-            sanitized[key] = value
-        else:
-            sanitized[key] = str(value)
-    
-    return sanitized
-
-def send_logs_to_api(logs):
-    """Logları API'ye gönderir"""
-    if not config:
-        print("Config yüklenmedi, loglar gönderilemedi")
-        return False
-    
-    try:
-        # API URL'yi sonundaki slash'ı kontrol ederek oluştur
-        base_url = config["api_url"]
-        if not base_url.endswith("/"):
-            base_url += "/"
-        api_url = base_url + "sniffer-log/"
-        
-        headers = {
-            "Authorization": f"Token {config['api_token']}",
-            "Content-Type": "application/json"
-        }
-
-        # Binary verileri temizle ve dönüştür
-        sanitized_logs = [sanitize_packet_data(log) for log in logs]
-        
-        payload = {
-            "license_key": config["license_key"],
-            "results": sanitized_logs
-        }
-        
-        # Debug için
-        print(f"API URL: {api_url}")
-        print(f"Headers: {headers}")
-        print(f"Payload size: {len(sanitized_logs)} paket")
-        
-        response = requests.post(
-            api_url,
-            headers=headers,
-            json=payload,
-            timeout=30  # Timeout değerini artırdım
-        )
-        
-        print(f"API yanıtı: {response.status_code}")
-        
-        if response.status_code == 200:
-            print(f"{len(logs)} adet log başarıyla gönderildi")
-            return True
-        else:
-            print(f"API yanıt hatası: {response.status_code} - {response.text}")
-            return False
-            
-    except Exception as e:
-        print(f"Loglar API'ye gönderilirken hata: {e}")
-        return False
+def initialize_log_file(filename):
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    with open(filename, 'w') as f:
+        json.dump([], f)
+    return filename
 
 def log_writer_thread():
-    """Logları toplar ve belirli aralıklarla API'ye gönderir"""
-    last_send_time = time.time()
+    global current_log_file, last_rotation_time
+    
+    current_log_file = initialize_log_file(get_log_filename())
+    last_rotation_time = time.time()
     log_data = []
-    retry_logs = []
-    max_retries = 3
-    retry_count = 0
     
     while True:
         try:
-            # En fazla 1 saniye bekle, böylece düzenli olarak gönderim kontrolü yapılabilir
+            # En fazla 1 saniye bekle, böylece düzenli olarak rotasyon kontrolü yapılabilir
             packet = log_queue.get(timeout=1)
             log_data.append(packet)
             
             # Şu anki zaman
             current_time = time.time()
             
-            # Başarısız gönderimler varsa önce onları dene
-            if retry_logs and retry_count < max_retries:
+            # Log dosyasını periyodik olarak yaz ve gerekirse rotasyon yap
+            if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL or len(log_data) >= 1000:
                 with log_writer_lock:
-                    print(f"Başarısız {len(retry_logs)} log tekrar gönderiliyor (Deneme {retry_count+1}/{max_retries})...")
-                    if send_logs_to_api(retry_logs):
-                        print("Tekrar gönderim başarılı!")
-                        retry_logs = []
-                        retry_count = 0
-                    else:
-                        retry_count += 1
+                    # Mevcut logları dosyaya yaz
+                    with open(current_log_file, 'r') as f:
+                        try:
+                            existing_data = json.load(f)
+                        except json.JSONDecodeError:
+                            existing_data = []
+                    
+                    # Mevcut dosyaya logları ekle
+                    existing_data.extend(log_data)
+                    
+                    # Atomik yazma için geçici dosya kullan
+                    temp_file = f"{current_log_file}.tmp"
+                    with open(temp_file, 'w') as f:
+                        json.dump(existing_data, f, indent=2)
+                    
+                    # Geçici dosyayı asıl dosyaya taşı
+                    os.replace(temp_file, current_log_file)
+                    
+                    # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur ve logları API'ye gönder
+                    if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
+                        # API'ye tüm logları gönder
+                        if not is_scanner_running() and existing_data:
+                            print(f"2 dakikalık süre doldu. {len(existing_data)} paket verisi API'ye gönderiliyor...")
+                            log_message(existing_data)
+                            
+                        # Yeni log dosyası oluştur
+                        current_log_file = initialize_log_file(get_log_filename())
+                        last_rotation_time = current_time
+                    
+                    # Log listesini temizle
+                    log_data = []
             
-            # Logları periyodik olarak API'ye gönder
-            if current_time - last_send_time >= LOG_ROTATION_INTERVAL or len(log_data) >= 1000:
-                with log_writer_lock:
-                    if log_data:
-                        print(f"{len(log_data)} log API'ye gönderiliyor...")
-                        if send_logs_to_api(log_data):
-                            last_send_time = current_time
-                            log_data = []
-                        else:
-                            # Eğer başarısız olursa, retry kuyruğuna ekle
-                            retry_logs.extend(log_data)
-                            log_data = []
-                            retry_count = 1
-                
             log_queue.task_done()
             
         except queue.Empty:
-            # Timeout olduğunda, elimizdeki logları gönder
+            # Timeout olduğunda, elimizdeki logları yaz
             if log_data:
                 with log_writer_lock:
-                    print(f"Timeout sonrası {len(log_data)} log API'ye gönderiliyor...")
-                    if send_logs_to_api(log_data):
-                        log_data = []
-                    else:
-                        # Eğer başarısız olursa, retry kuyruğuna ekle
-                        retry_logs.extend(log_data)
-                        log_data = []
-                        retry_count = 1
-            
-            # Hala retry logs varsa ve max retry aşılmadıysa tekrar dene
-            elif retry_logs and retry_count < max_retries:
-                with log_writer_lock:
-                    print(f"Timeout sonrası başarısız {len(retry_logs)} log tekrar gönderiliyor (Deneme {retry_count+1}/{max_retries})...")
-                    if send_logs_to_api(retry_logs):
-                        print("Tekrar gönderim başarılı!")
-                        retry_logs = []
-                        retry_count = 0
-                    else:
-                        retry_count += 1
+                    with open(current_log_file, 'r') as f:
+                        try:
+                            existing_data = json.load(f)
+                        except json.JSONDecodeError:
+                            existing_data = []
+                    
+                    existing_data.extend(log_data)
+                    
+                    temp_file = f"{current_log_file}.tmp"
+                    with open(temp_file, 'w') as f:
+                        json.dump(existing_data, f, indent=2)
+                    
+                    os.replace(temp_file, current_log_file)
+                    log_data = []
         
         except Exception as e:
-            print(f"Log işlenirken hata: {e}")
+            print(f"Log yazarken hata: {e}")
             time.sleep(1)
 
 def main():
-    # Config dosyasını yükle
-    load_config()
-    
     # Log writer thread'ini başlat
     log_thread = threading.Thread(target=log_writer_thread, daemon=True)
     log_thread.start()
     
     conn = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
 
-    def add_to_queue(packet_data):
+    def write_to_json(packet_data):
         if is_scanner_running():
             return
         
@@ -261,12 +208,12 @@ def main():
                         'type': icmp_type,
                         'code': code,
                         'checksum': checksum,
-                        'data': data
+                        'data': format_multi_line("",data)
                     }
                     print(TAB_1 + 'ICMP Packet:')
                     print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
                     print(TAB_2 + 'Data:')
-                    print(DATA_TAB_3 + data)
+                    print(format_multi_line(DATA_TAB_3, data))
                 elif proto == 6:
                     src_port, dest_port, sequence, acknowledgement, flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin, data = tcp_segment(data)
                     packet_data['tcp_segment'] = {
@@ -282,7 +229,7 @@ def main():
                             'SYN': flag_syn,
                             'FIN': flag_fin
                         },
-                        'data': data
+                        'data': format_multi_line("",data)
                     }
                     print(TAB_1 + 'TCP Segment:')
                     print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
@@ -297,7 +244,7 @@ def main():
                         'source_port': src_port,
                         'destination_port': dest_port,
                         'size': length,
-                        'data': data
+                        'data': format_multi_line("",data)
                     }
                     print(TAB_1 + 'UDP Segment:')
                     print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
@@ -311,7 +258,7 @@ def main():
             print("Exiting program...")
             break
         
-        add_to_queue(packet_data)
+        write_to_json(packet_data)
 
 def ethernet_frame(data):
     dest_mac, src_mac, proto = struct.unpack('! 6s 6s H', data[:14])
