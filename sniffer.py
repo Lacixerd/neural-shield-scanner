@@ -41,12 +41,44 @@ def load_config():
     try:
         with open('config.json', 'r') as f:
             config = json.load(f)
+        print("Config dosyası başarıyla yüklendi:")
+        print(f"API URL: {config['api_url']}")
+        print(f"API Token: {config['api_token'][:8]}...")
+        print(f"License Key: {config['license_key'][:8]}...")
+    except FileNotFoundError:
+        print("Config dosyası bulunamadı. Doğru dizinde olduğunuzdan emin olun.")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print("Config dosyası geçerli bir JSON formatında değil.")
+        sys.exit(1)
     except Exception as e:
         print(f"Config yüklenirken hata oluştu: {e}")
         sys.exit(1)
 
 def is_scanner_running():
     return os.path.exists("scanner_running.signal")
+
+def binary_to_hex(data):
+    """Binary verileri hex string formatına dönüştürür"""
+    if isinstance(data, bytes):
+        return data.hex()
+    return data
+
+def sanitize_packet_data(packet_data):
+    """Paket verisini API'ye gönderilebilir hale getirir, binary verileri dönüştürür"""
+    sanitized = {}
+    
+    for key, value in packet_data.items():
+        if isinstance(value, dict):
+            sanitized[key] = sanitize_packet_data(value)
+        elif isinstance(value, bytes):
+            sanitized[key] = binary_to_hex(value)
+        elif isinstance(value, (int, float, str, bool, type(None))):
+            sanitized[key] = value
+        else:
+            sanitized[key] = str(value)
+    
+    return sanitized
 
 def send_logs_to_api(logs):
     """Logları API'ye gönderir"""
@@ -55,22 +87,38 @@ def send_logs_to_api(logs):
         return False
     
     try:
-        api_url = config["api_url"] + "sniffer-log/"
+        # API URL'yi sonundaki slash'ı kontrol ederek oluştur
+        base_url = config["api_url"]
+        if not base_url.endswith("/"):
+            base_url += "/"
+        api_url = base_url + "sniffer-log/"
+        
         headers = {
             "Authorization": f"Token {config['api_token']}",
             "Content-Type": "application/json"
         }
 
+        # Binary verileri temizle ve dönüştür
+        sanitized_logs = [sanitize_packet_data(log) for log in logs]
+        
         payload = {
             "license_key": config["license_key"],
-            "results": logs
+            "results": sanitized_logs
         }
+        
+        # Debug için
+        print(f"API URL: {api_url}")
+        print(f"Headers: {headers}")
+        print(f"Payload size: {len(sanitized_logs)} paket")
         
         response = requests.post(
             api_url,
             headers=headers,
             json=payload,
+            timeout=30  # Timeout değerini artırdım
         )
+        
+        print(f"API yanıtı: {response.status_code}")
         
         if response.status_code == 200:
             print(f"{len(logs)} adet log başarıyla gönderildi")
@@ -87,6 +135,9 @@ def log_writer_thread():
     """Logları toplar ve belirli aralıklarla API'ye gönderir"""
     last_send_time = time.time()
     log_data = []
+    retry_logs = []
+    max_retries = 3
+    retry_count = 0
     
     while True:
         try:
@@ -97,13 +148,30 @@ def log_writer_thread():
             # Şu anki zaman
             current_time = time.time()
             
+            # Başarısız gönderimler varsa önce onları dene
+            if retry_logs and retry_count < max_retries:
+                with log_writer_lock:
+                    print(f"Başarısız {len(retry_logs)} log tekrar gönderiliyor (Deneme {retry_count+1}/{max_retries})...")
+                    if send_logs_to_api(retry_logs):
+                        print("Tekrar gönderim başarılı!")
+                        retry_logs = []
+                        retry_count = 0
+                    else:
+                        retry_count += 1
+            
             # Logları periyodik olarak API'ye gönder
             if current_time - last_send_time >= LOG_ROTATION_INTERVAL or len(log_data) >= 1000:
                 with log_writer_lock:
                     if log_data:
+                        print(f"{len(log_data)} log API'ye gönderiliyor...")
                         if send_logs_to_api(log_data):
                             last_send_time = current_time
                             log_data = []
+                        else:
+                            # Eğer başarısız olursa, retry kuyruğuna ekle
+                            retry_logs.extend(log_data)
+                            log_data = []
+                            retry_count = 1
                 
             log_queue.task_done()
             
@@ -111,8 +179,25 @@ def log_writer_thread():
             # Timeout olduğunda, elimizdeki logları gönder
             if log_data:
                 with log_writer_lock:
+                    print(f"Timeout sonrası {len(log_data)} log API'ye gönderiliyor...")
                     if send_logs_to_api(log_data):
                         log_data = []
+                    else:
+                        # Eğer başarısız olursa, retry kuyruğuna ekle
+                        retry_logs.extend(log_data)
+                        log_data = []
+                        retry_count = 1
+            
+            # Hala retry logs varsa ve max retry aşılmadıysa tekrar dene
+            elif retry_logs and retry_count < max_retries:
+                with log_writer_lock:
+                    print(f"Timeout sonrası başarısız {len(retry_logs)} log tekrar gönderiliyor (Deneme {retry_count+1}/{max_retries})...")
+                    if send_logs_to_api(retry_logs):
+                        print("Tekrar gönderim başarılı!")
+                        retry_logs = []
+                        retry_count = 0
+                    else:
+                        retry_count += 1
         
         except Exception as e:
             print(f"Log işlenirken hata: {e}")
