@@ -163,17 +163,48 @@ def log_writer_thread():
                     if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
                         rotation_counter += 1
                         print(f"[DEBUG] {rotation_counter}. ROTASYON ZAMANI - Geçen süre: {int(current_time - last_rotation_time)} saniye")
+                        
+                        # Gönderim öncesi log boyutunu kontrol et
+                        log_data_size = len(str(existing_data))
+                        print(f"[DEBUG] Toplam log boyutu: {log_data_size} karakter, {len(existing_data)} paket")
+                        
                         if not is_scanner_running() and existing_data:
                             print(f"[DEBUG] API'ye gönderim başlatılıyor! Paket sayısı: {len(existing_data)}")
+                            
+                            # Önceki dosyanın yedeğini al (debug için)
+                            backup_file = f"{current_log_file}.backup"
+                            with open(backup_file, 'w') as f:
+                                json.dump(existing_data, f, indent=2)
+                            print(f"[DEBUG] Önceki verinin yedeği alındı: {backup_file}")
+                            
+                            # Verileri API'ye gönder
                             log_message(existing_data)
                             print(f"[DEBUG] API'ye gönderim tamamlandı!")
+                            
+                            # Mevcut log dosyasını temizle - çok önemli!
+                            existing_data = []
                         else:
                             print(f"[DEBUG] API'ye gönderim yapılmadı! Scanner çalışıyor: {is_scanner_running()}, Veri boş mu: {len(existing_data) == 0}")
                         
+                        # Rotasyon zamanını güncelle
                         old_rotation_time = last_rotation_time
+                        
+                        # Yeni log dosyasına geç
+                        old_log_file = current_log_file
                         current_log_file = initialize_log_file(get_log_filename())
+                        
+                        # Bu kısımda eski dosyada kalan veriler boşaltılmış olmalı, sadece yeni paketleri ekle
+                        if existing_data:
+                            # Yeni oluşturulan dosyaya eski verileri aktarma - artık boş olmalı
+                            temp_file = f"{current_log_file}.tmp"
+                            with open(temp_file, 'w') as f:
+                                json.dump(existing_data, f, indent=2)
+                            os.replace(temp_file, current_log_file)
+                        
+                        # Rotasyon zamanını güncelle
                         last_rotation_time = current_time
                         print(f"[DEBUG] Rotasyon zamanı güncellendi: {datetime.fromtimestamp(old_rotation_time).strftime('%H:%M:%S')} -> {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
+                        print(f"[DEBUG] Log dosyası değiştirildi: {os.path.basename(old_log_file)} -> {os.path.basename(current_log_file)}")
                     
                     # Log listesini temizle
                     log_data = []
@@ -218,20 +249,48 @@ def log_writer_thread():
                         except json.JSONDecodeError:
                             existing_data = []
                     
+                    # Gönderim öncesi log boyutunu kontrol et
+                    log_data_size = len(str(existing_data))
+                    print(f"[DEBUG] [TIMEOUT] Toplam log boyutu: {log_data_size} karakter, {len(existing_data)} paket")
+                    
                     if not is_scanner_running() and existing_data:
                         print(f"[DEBUG] [TIMEOUT] API'ye gönderim başlatılıyor! Paket sayısı: {len(existing_data)}")
+                        
+                        # Önceki dosyanın yedeğini al (debug için)
+                        backup_file = f"{current_log_file}.backup"
+                        with open(backup_file, 'w') as f:
+                            json.dump(existing_data, f, indent=2)
+                        print(f"[DEBUG] [TIMEOUT] Önceki verinin yedeği alındı: {backup_file}")
+                        
                         try:
                             log_message(existing_data)
                             print(f"[DEBUG] [TIMEOUT] API'ye gönderim tamamlandı!")
                         except Exception as e:
                             print(f"[DEBUG] [TIMEOUT] API'ye gönderimde HATA: {str(e)}")
+                        
+                        # Mevcut log dosyasını temizle - çok önemli!
+                        existing_data = []
                     else:
                         print(f"[DEBUG] [TIMEOUT] API'ye gönderim yapılmadı! Scanner çalışıyor: {is_scanner_running()}, Veri boş mu: {len(existing_data) == 0}")
                     
+                    # Rotasyon zamanını güncelle
                     old_rotation_time = last_rotation_time
+                    
+                    # Yeni log dosyasına geç
+                    old_log_file = current_log_file
                     current_log_file = initialize_log_file(get_log_filename())
+                    
+                    # Bu kısımda eski dosyada kalan veriler boşaltılmış olmalı, sadece yeni paketleri ekle
+                    if existing_data:
+                        # Yeni oluşturulan dosyaya eski verileri aktarma - artık boş olmalı
+                        temp_file = f"{current_log_file}.tmp"
+                        with open(temp_file, 'w') as f:
+                            json.dump(existing_data, f, indent=2)
+                        os.replace(temp_file, current_log_file)
+                    
                     last_rotation_time = current_time
                     print(f"[DEBUG] [TIMEOUT] Rotasyon zamanı güncellendi: {datetime.fromtimestamp(old_rotation_time).strftime('%H:%M:%S')} -> {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
+                    print(f"[DEBUG] [TIMEOUT] Log dosyası değiştirildi: {os.path.basename(old_log_file)} -> {os.path.basename(current_log_file)}")
         
         except Exception as e:
             print(f"Log yazarken hata: {e}")
