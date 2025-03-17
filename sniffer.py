@@ -214,7 +214,7 @@ def main():
                         'type': icmp_type,
                         'code': code,
                         'checksum': checksum,
-                        'data': format_multi_line("",data)
+                        'data': format_multi_line("", data, hex=False)
                     }
                     print(TAB_1 + 'ICMP Packet:')
                     print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
@@ -235,7 +235,7 @@ def main():
                             'SYN': flag_syn,
                             'FIN': flag_fin
                         },
-                        'data': format_multi_line("",data)
+                        'data': format_multi_line("", data, hex=False)
                     }
                     print(TAB_1 + 'TCP Segment:')
                     print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
@@ -250,7 +250,7 @@ def main():
                         'source_port': src_port,
                         'destination_port': dest_port,
                         'size': length,
-                        'data': format_multi_line("",data)
+                        'data': format_multi_line("", data, hex=False)
                     }
                     print(TAB_1 + 'UDP Segment:')
                     print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
@@ -303,7 +303,7 @@ def udp_segment(data):
     src_port, dest_port, size = struct.unpack('! H H 2x H', data[:8])
     return src_port, dest_port, size, data[8:]
 
-def format_multi_line(prefix, string, size=80):
+def format_multi_line(prefix, string, size=80, hex=True):
     """
     Veriyi hem hex dump hem de ASCII formatında gösterir.
     
@@ -311,31 +311,34 @@ def format_multi_line(prefix, string, size=80):
         prefix: Her satırın başına eklenecek metin
         string: Formatlanacak bytes veya string verisi
         size: Her satırın maksimum uzunluğu
+        hex: True ise hem hex hem ASCII gösterir, False ise sadece ASCII gösterir
         
     Returns:
         Formatlanmış veri metni
     """
     if isinstance(string, bytes):
-        # HEX ve ASCII formatını birlikte göster
         result = []
         for offset in range(0, len(string), 16):
-            # Satır başında hex offset'i göster
-            hex_offset = f"{offset:04x}"
-            line = f"{hex_offset}  "
-            
             # 16 byte'lık bir blok al
             chunk = string[offset:offset+16]
             
-            # Hex formatını oluştur (8'li gruplar halinde)
-            hex_line = ""
-            for i, b in enumerate(chunk):
-                if i == 8:  # 8. byte'tan sonra ekstra boşluk ekle
-                    hex_line += " "
-                hex_line += f"{b:02x} "
-            
-            # Hex satırını tamamla (eksik byte'lar için boşluk)
-            hex_line = hex_line.ljust(49, ' ')  # 16 byte için 3 karakter/byte + ekstra boşluk
-            line += hex_line
+            if hex:
+                # Satır başında hex offset'i göster
+                hex_offset = f"{offset:04x}"
+                line = f"{hex_offset}  "
+                
+                # Hex formatını oluştur (8'li gruplar halinde)
+                hex_line = ""
+                for i, b in enumerate(chunk):
+                    if i == 8:  # 8. byte'tan sonra ekstra boşluk ekle
+                        hex_line += " "
+                    hex_line += f"{b:02x} "
+                
+                # Hex satırını tamamla (eksik byte'lar için boşluk)
+                hex_line = hex_line.ljust(49, ' ')  # 16 byte için 3 karakter/byte + ekstra boşluk
+                line += hex_line
+            else:
+                line = ""
             
             # ASCII kısmını ekle
             ascii_part = ""
