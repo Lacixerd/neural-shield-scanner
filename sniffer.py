@@ -59,18 +59,23 @@ def log_message(packet_data):
             "results": packet_data
         }
 
+        print(f"[DEBUG] API isteği gönderiliyor: {url}")
+        print(f"[DEBUG] Payload boyutu: {len(str(payload))} karakter")
+        
         response = requests.post(url, headers=headers, json=payload)
 
         if response.status_code == 201:
+            print(f"[DEBUG] API yanıtı: HTTP {response.status_code}")
             print("Network Scan log saved successfully.")
+            return True
         else:
+            print(f"[DEBUG] API yanıtı: HTTP {response.status_code}")
             print(f"Network Scan log save failed: {response.status_code}\nError: {response.text}")
-            print("Exiting...")
-            sys.exit()
+            return False
     except Exception as e:
+        print(f"[DEBUG] API isteği sırasında istisna: {str(e)}")
         print(f"Network Scan log save error: {e}")
-        print("Exiting...")
-        sys.exit()
+        return False
 
 def is_scanner_running():
     return os.path.exists("scanner_running.signal")
@@ -90,7 +95,9 @@ def log_writer_thread():
     
     current_log_file = initialize_log_file(get_log_filename())
     last_rotation_time = time.time()
+    print(f"[DEBUG] İlk başlatma zamanı: {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
     log_data = []
+    rotation_counter = 0
     
     while True:
         try:
@@ -100,6 +107,11 @@ def log_writer_thread():
             
             # Şu anki zaman
             current_time = time.time()
+            time_diff = current_time - last_rotation_time
+            
+            # Her 30 saniyede bir durumu loglayalım
+            if int(time_diff) % 30 == 0 and int(time_diff) > 0:
+                print(f"[DEBUG] Geçen süre: {int(time_diff)} saniye. Son rotasyon: {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
             
             # Log dosyasını periyodik olarak yaz ve gerekirse rotasyon yap
             if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL or len(log_data) >= 1000:
@@ -124,11 +136,19 @@ def log_writer_thread():
                     
                     # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur ve API'ye gönder
                     if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
+                        rotation_counter += 1
+                        print(f"[DEBUG] {rotation_counter}. ROTASYON ZAMANI - Geçen süre: {int(current_time - last_rotation_time)} saniye")
                         if not is_scanner_running() and existing_data:
-                            print(f"2 dakikalık süre doldu. {len(existing_data)} paket verisi API'ye gönderiliyor...")
+                            print(f"[DEBUG] API'ye gönderim başlatılıyor! Paket sayısı: {len(existing_data)}")
                             log_message(existing_data)
+                            print(f"[DEBUG] API'ye gönderim tamamlandı!")
+                        else:
+                            print(f"[DEBUG] API'ye gönderim yapılmadı! Scanner çalışıyor: {is_scanner_running()}, Veri boş mu: {len(existing_data) == 0}")
+                        
+                        old_rotation_time = last_rotation_time
                         current_log_file = initialize_log_file(get_log_filename())
                         last_rotation_time = current_time
+                        print(f"[DEBUG] Rotasyon zamanı güncellendi: {datetime.fromtimestamp(old_rotation_time).strftime('%H:%M:%S')} -> {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
                     
                     # Log listesini temizle
                     log_data = []
@@ -138,6 +158,11 @@ def log_writer_thread():
         except queue.Empty:
             # Timeout olduğunda, elimizdeki logları yaz ve zamana göre log rotasyonu yap
             current_time = time.time()
+            time_diff = current_time - last_rotation_time
+            
+            # Her 30 saniyede bir durumu loglayalım (timeout durumunda)
+            if int(time_diff) % 30 == 0 and int(time_diff) > 0:
+                print(f"[DEBUG] [TIMEOUT] Geçen süre: {int(time_diff)} saniye. Son rotasyon: {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
             
             if log_data:
                 with log_writer_lock:
@@ -158,6 +183,9 @@ def log_writer_thread():
             
             # Paket gelmese bile 2 dakika geçtiyse log rotasyonu ve gönderimi yap
             if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
+                rotation_counter += 1
+                print(f"[DEBUG] [TIMEOUT] {rotation_counter}. ROTASYON ZAMANI - Geçen süre: {int(current_time - last_rotation_time)} saniye")
+                
                 with log_writer_lock:
                     with open(current_log_file, 'r') as f:
                         try:
@@ -166,11 +194,19 @@ def log_writer_thread():
                             existing_data = []
                     
                     if not is_scanner_running() and existing_data:
-                        print(f"2 dakikalık süre doldu. {len(existing_data)} paket verisi API'ye gönderiliyor...")
-                        log_message(existing_data)
+                        print(f"[DEBUG] [TIMEOUT] API'ye gönderim başlatılıyor! Paket sayısı: {len(existing_data)}")
+                        try:
+                            log_message(existing_data)
+                            print(f"[DEBUG] [TIMEOUT] API'ye gönderim tamamlandı!")
+                        except Exception as e:
+                            print(f"[DEBUG] [TIMEOUT] API'ye gönderimde HATA: {str(e)}")
+                    else:
+                        print(f"[DEBUG] [TIMEOUT] API'ye gönderim yapılmadı! Scanner çalışıyor: {is_scanner_running()}, Veri boş mu: {len(existing_data) == 0}")
                     
+                    old_rotation_time = last_rotation_time
                     current_log_file = initialize_log_file(get_log_filename())
                     last_rotation_time = current_time
+                    print(f"[DEBUG] [TIMEOUT] Rotasyon zamanı güncellendi: {datetime.fromtimestamp(old_rotation_time).strftime('%H:%M:%S')} -> {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
         
         except Exception as e:
             print(f"Log yazarken hata: {e}")
@@ -198,8 +234,8 @@ def main():
                 
             raw_data, addr = conn.recvfrom(65536)
             dest_mac, src_mac, eth_proto, data = ethernet_frame(raw_data)
-            print('\nEthernet Frame:')
-            print(TAB_1 +'Destination: {}, Source: {}, Protocol: {}'.format(dest_mac, src_mac, eth_proto))
+            # print('\nEthernet Frame:')
+            # print(TAB_1 +'Destination: {}, Source: {}, Protocol: {}'.format(dest_mac, src_mac, eth_proto))
             
             packet_data = {
                 'timestamp': datetime.now().isoformat(),
@@ -220,10 +256,10 @@ def main():
                     'source': src,
                     'target': target
                 }
-                print(TAB_1 + 'IPv4 Packet:')
-                print(TAB_2 + 'Version: {}, Header Length: {}, TTL: {}'.format(version, header_length, ttl))
-                print(TAB_2 + 'Protocol: {}'.format(proto))
-                print(TAB_2 + 'Source: {}, Target: {}'.format(src, target))
+                # print(TAB_1 + 'IPv4 Packet:')
+                # print(TAB_2 + 'Version: {}, Header Length: {}, TTL: {}'.format(version, header_length, ttl))
+                # print(TAB_2 + 'Protocol: {}'.format(proto))
+                # print(TAB_2 + 'Source: {}, Target: {}'.format(src, target))
 
                 if proto == 1:
                     icmp_type, code, checksum, data = icmp_packet(data)
@@ -233,10 +269,10 @@ def main():
                         'checksum': checksum,
                         'data': format_multi_line("", data, hex=False)
                     }
-                    print(TAB_1 + 'ICMP Packet:')
-                    print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
-                    print(TAB_2 + 'Data:')
-                    print(format_multi_line(DATA_TAB_3, data))
+                    # print(TAB_1 + 'ICMP Packet:')
+                    # print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
+                    # print(TAB_2 + 'Data:')
+                    # print(format_multi_line(DATA_TAB_3, data))
                 elif proto == 6:
                     src_port, dest_port, sequence, acknowledgement, flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin, data = tcp_segment(data)
                     packet_data['tcp_segment'] = {
@@ -254,13 +290,13 @@ def main():
                         },
                         'data': format_multi_line("", data, hex=False)
                     }
-                    print(TAB_1 + 'TCP Segment:')
-                    print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
-                    print(TAB_2 + 'Sequence: {}, Acknowledgement: {}'.format(sequence, acknowledgement))
-                    print(TAB_2 + 'Flags: {}')
-                    print(TAB_3 + 'URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}'.format(flag_urg ,flag_ack,flag_ack,flag_psh, flag_rst, flag_syn, flag_fin))
-                    print(TAB_2 + 'Data:')
-                    print(format_multi_line(DATA_TAB_3, data))
+                    # print(TAB_1 + 'TCP Segment:')
+                    # print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
+                    # print(TAB_2 + 'Sequence: {}, Acknowledgement: {}'.format(sequence, acknowledgement))
+                    # print(TAB_2 + 'Flags: {}')
+                    # print(TAB_3 + 'URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}'.format(flag_urg ,flag_ack,flag_ack,flag_psh, flag_rst, flag_syn, flag_fin))
+                    # print(TAB_2 + 'Data:')
+                    # print(format_multi_line(DATA_TAB_3, data))
                 elif proto == 17:
                     src_port, dest_port, length, data = udp_segment(data)
                     packet_data['udp_segment'] = {
@@ -269,11 +305,11 @@ def main():
                         'size': length,
                         'data': format_multi_line("", data, hex=False)
                     }
-                    print(TAB_1 + 'UDP Segment:')
-                    print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
-                    print(TAB_2 + 'Size: {}'.format(length))
-                    print(TAB_2 + 'Data:')
-                    print(format_multi_line(DATA_TAB_3, data))
+                    # print(TAB_1 + 'UDP Segment:')
+                    # print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
+                    # print(TAB_2 + 'Size: {}'.format(length))
+                    # print(TAB_2 + 'Data:')
+                    # print(format_multi_line(DATA_TAB_3, data))
         except Exception as e:
             print(f"Error: {e}")
             time.sleep(5)
