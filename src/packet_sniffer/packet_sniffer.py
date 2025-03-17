@@ -16,6 +16,7 @@ import time
 import sys
 import threading
 import queue
+import requests
 
 TAB_1 = '\t - '
 TAB_2 = '\t\t - '
@@ -33,6 +34,43 @@ log_queue = queue.Queue()
 current_log_file = None
 last_rotation_time = 0
 log_writer_lock = threading.Lock()
+
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+config_path = os.path.join(BASE_DIR, 'config.json')
+
+with open(config_path, "r") as f:
+    config_file = json.load(f)
+
+def log_message(packet_data):
+    try:
+        url = config_file['api_url'] + "sniffer-log/"
+
+        headers = {
+            "Authorization": f"Token {config_file['api_token']}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "license_key": config_file['license_key'],
+            "results": packet_data
+        }
+
+        response = requests.post(url, headers=headers, json=payload)
+
+        if response.status_code == 201:
+            print("Network Scan log saved successfully.")
+        else:
+            print(f"Network Scan log save failed: {response.status_code}\nError: {response.text}")
+            print("Exiting...")
+            sys.exit()
+    except Exception as e:
+        print(f"Network Scan log save error: {e}")
+        print("Exiting...")
+        sys.exit()
 
 def is_scanner_running():
     return os.path.exists("scanner_running.signal")
@@ -86,6 +124,9 @@ def log_writer_thread():
                     
                     # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur
                     if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
+                        if not is_scanner_running() and existing_data:
+                            print(f"2 dakikalık süre doldu. {len(existing_data)} paket verisi API'ye gönderiliyor...")
+                            log_message(existing_data)
                         current_log_file = initialize_log_file(get_log_filename())
                         last_rotation_time = current_time
                     
@@ -117,7 +158,36 @@ def log_writer_thread():
             print(f"Log yazarken hata: {e}")
             time.sleep(1)
 
+def get_local_ip_addresses():
+    """Sistemdeki tüm yerel IP adreslerini getirir."""
+    local_ips = set()
+    try:
+        # Tüm ağ arayüzlerini kontrol etme
+        for interface in socket.if_nameindex():
+            try:
+                # IPv4 adreslerini alma
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                ip = socket.inet_ntoa(socket.ioctl(
+                    s.fileno(),
+                    0x8915,  # SIOCGIFADDR
+                    struct.pack('256s', interface[1][:15].encode())
+                )[20:24])
+                local_ips.add(ip)
+            except OSError:
+                # Bazı arayüzler IP adresine sahip olmayabilir
+                pass
+    except Exception as e:
+        print(f"Yerel IP adresleri alınırken hata: {e}")
+    
+    # Loopback adresini her zaman ekle
+    local_ips.add('127.0.0.1')
+    return local_ips
+
 def main():
+    # Yerel IP adreslerini al
+    local_ip_addresses = get_local_ip_addresses()
+    print(f"Filtrelenen yerel IP adresleri: {local_ip_addresses}")
+    
     # Log writer thread'ini başlat
     log_thread = threading.Thread(target=log_writer_thread, daemon=True)
     log_thread.start()
@@ -139,8 +209,8 @@ def main():
                 
             raw_data, addr = conn.recvfrom(65536)
             dest_mac, src_mac, eth_proto, data = ethernet_frame(raw_data)
-            print('\nEthernet Frame:')
-            print(TAB_1 +'Destination: {}, Source: {}, Protocol: {}'.format(dest_mac, src_mac, eth_proto))
+            # print('\nEthernet Frame:')
+            # print(TAB_1 +'Destination: {}, Source: {}, Protocol: {}'.format(dest_mac, src_mac, eth_proto))
             
             packet_data = {
                 'timestamp': datetime.now().isoformat(),
@@ -151,8 +221,15 @@ def main():
                 }
             }
 
+            # IPv4 paketlerini işle
             if eth_proto == 8:
                 (version, header_length, ttl, proto, src, target, data) = ipv4_packet(data)
+                
+                # Yerel IP adresi filtreleme kontrolü
+                if src in local_ip_addresses or target in local_ip_addresses:
+                    # Yerel IP adresine gelen veya giden paketi atla
+                    continue
+                
                 packet_data['ipv4_packet'] = {
                     'version': version,
                     'header_length': header_length,
@@ -161,22 +238,23 @@ def main():
                     'source': src,
                     'target': target
                 }
-                print(TAB_1 + 'IPv4 Packet:')
-                print(TAB_2 + 'Version: {}, Header Length: {}, TTL: {}'.format(version, header_length, ttl))
-                print(TAB_2 + 'Protocol: {}'.format(proto))
-                print(TAB_2 + 'Source: {}, Target: {}'.format(src, target))
+                # print(TAB_1 + 'IPv4 Packet:')
+                # print(TAB_2 + 'Version: {}, Header Length: {}, TTL: {}'.format(version, header_length, ttl))
+                # print(TAB_2 + 'Protocol: {}'.format(proto))
+                # print(TAB_2 + 'Source: {}, Target: {}'.format(src, target))
 
                 if proto == 1:
                     icmp_type, code, checksum, data = icmp_packet(data)
                     packet_data['icmp_packet'] = {
                         'type': icmp_type,
                         'code': code,
-                        'checksum': checksum
+                        'checksum': checksum,
+                        'data': format_multi_line("",data, hex=False)
                     }
-                    print(TAB_1 + 'ICMP Packet:')
-                    print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
-                    print(TAB_2 + 'Data:')
-                    print(DATA_TAB_3 + data)
+                    # print(TAB_1 + 'ICMP Packet:')
+                    # print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
+                    # print(TAB_2 + 'Data:')
+                    # print(format_multi_line(DATA_TAB_3, data))
                 elif proto == 6:
                     src_port, dest_port, sequence, acknowledgement, flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin, data = tcp_segment(data)
                     packet_data['tcp_segment'] = {
@@ -191,27 +269,29 @@ def main():
                             'RST': flag_rst,
                             'SYN': flag_syn,
                             'FIN': flag_fin
-                        }
+                        },
+                        'data': format_multi_line("",data, hex=False)
                     }
-                    print(TAB_1 + 'TCP Segment:')
-                    print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
-                    print(TAB_2 + 'Sequence: {}, Acknowledgement: {}'.format(sequence, acknowledgement))
-                    print(TAB_2 + 'Flags: {}')
-                    print(TAB_3 + 'URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}'.format(flag_urg ,flag_ack,flag_ack,flag_psh, flag_rst, flag_syn, flag_fin))
-                    print(TAB_2 + 'Data:')
-                    print(format_multi_line(DATA_TAB_3, data))
+                    # print(TAB_1 + 'TCP Segment:')
+                    # print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
+                    # print(TAB_2 + 'Sequence: {}, Acknowledgement: {}'.format(sequence, acknowledgement))
+                    # print(TAB_2 + 'Flags: {}')
+                    # print(TAB_3 + 'URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}'.format(flag_urg ,flag_ack,flag_ack,flag_psh, flag_rst, flag_syn, flag_fin))
+                    # print(TAB_2 + 'Data:')
+                    # print(format_multi_line(DATA_TAB_3, data))
                 elif proto == 17:
                     src_port, dest_port, length, data = udp_segment(data)
                     packet_data['udp_segment'] = {
                         'source_port': src_port,
                         'destination_port': dest_port,
-                        'size': length
+                        'size': length,
+                        'data': format_multi_line("",data, hex=False)
                     }
-                    print(TAB_1 + 'UDP Segment:')
-                    print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
-                    print(TAB_2 + 'Size: {}'.format(length))
-                    print(TAB_2 + 'Data:')
-                    print(format_multi_line(DATA_TAB_3, data))
+                    # print(TAB_1 + 'UDP Segment:')
+                    # print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
+                    # print(TAB_2 + 'Size: {}'.format(length))
+                    # print(TAB_2 + 'Data:')
+                    # print(format_multi_line(DATA_TAB_3, data))
         except Exception as e:
             print(f"Error: {e}")
             time.sleep(5)
@@ -258,7 +338,7 @@ def udp_segment(data):
     src_port, dest_port, size = struct.unpack('! H H 2x H', data[:8])
     return src_port, dest_port, size, data[8:]
 
-def format_multi_line(prefix, string, size=80):
+def format_multi_line(prefix, string, size=80, hex=False):
     """
     Veriyi hem hex dump hem de ASCII formatında gösterir.
     
@@ -274,23 +354,27 @@ def format_multi_line(prefix, string, size=80):
         # HEX ve ASCII formatını birlikte göster
         result = []
         for offset in range(0, len(string), 16):
-            # Satır başında hex offset'i göster
-            hex_offset = f"{offset:04x}"
-            line = f"{hex_offset}  "
             
-            # 16 byte'lık bir blok al
-            chunk = string[offset:offset+16]
-            
-            # Hex formatını oluştur (8'li gruplar halinde)
-            hex_line = ""
-            for i, b in enumerate(chunk):
-                if i == 8:  # 8. byte'tan sonra ekstra boşluk ekle
-                    hex_line += " "
-                hex_line += f"{b:02x} "
-            
-            # Hex satırını tamamla (eksik byte'lar için boşluk)
-            hex_line = hex_line.ljust(49, ' ')  # 16 byte için 3 karakter/byte + ekstra boşluk
-            line += hex_line
+            if hex:  
+                # Satır başında hex offset'i göster
+                hex_offset = f"{offset:04x}"
+                line = f"{hex_offset}  "
+
+                # 16 byte'lık bir blok al
+                chunk = string[offset:offset+16]
+                
+                # Hex formatını oluştur (8'li gruplar halinde)
+                hex_line = ""
+                for i, b in enumerate(chunk):
+                    if i == 8:  # 8. byte'tan sonra ekstra boşluk ekle
+                        hex_line += " "
+                    hex_line += f"{b:02x} "
+                
+                # Hex satırını tamamla (eksik byte'lar için boşluk)
+                hex_line = hex_line.ljust(49, ' ')  # 16 byte için 3 karakter/byte + ekstra boşluk
+                line += hex_line
+            else:
+                line = ""
             
             # ASCII kısmını ekle
             ascii_part = ""
@@ -304,12 +388,12 @@ def format_multi_line(prefix, string, size=80):
             line += ascii_part
             result.append(prefix + line)
         
-        return "\n".join(result)
+        return " ".join(result)
     else:
         # Eğer bytes değilse normal text wrap kullan
         string_str = str(string)
         size -= len(prefix)
-        return '\n'.join([prefix + line for line in textwrap.wrap(string_str, size)])
+        return ' '.join([prefix + line for line in textwrap.wrap(string_str, size)])
 
 if __name__ == "__main__":
     main()
