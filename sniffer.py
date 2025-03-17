@@ -47,6 +47,30 @@ with open(config_path, "r") as f:
 
 def log_message(packet_data):
     try:
+        # Paket sayısı kontrolü - çok büyük olmaması için bölme işlemi
+        if len(packet_data) > 500:
+            print(f"[DEBUG] Çok fazla paket var ({len(packet_data)}). Paketler daha küçük parçalara bölünüyor...")
+            
+            # Paketleri 500'lük gruplar halinde böl
+            chunks = [packet_data[i:i+500] for i in range(0, len(packet_data), 500)]
+            success_count = 0
+            
+            for i, chunk in enumerate(chunks):
+                print(f"[DEBUG] Parça {i+1}/{len(chunks)} gönderiliyor ({len(chunk)} paket)...")
+                if send_log_to_api(chunk):
+                    success_count += 1
+            
+            print(f"[DEBUG] Toplamda {success_count}/{len(chunks)} parça başarıyla gönderildi.")
+            return success_count > 0
+        else:
+            # Tek parça olarak gönder
+            return send_log_to_api(packet_data)
+    except Exception as e:
+        print(f"[DEBUG] Paket bölme işleminde hata: {str(e)}")
+        return False
+
+def send_log_to_api(data_chunk):
+    try:
         url = config_file['api_url'] + "sniffer-log/"
 
         headers = {
@@ -56,11 +80,12 @@ def log_message(packet_data):
 
         payload = {
             "license_key": config_file['license_key'],
-            "results": packet_data
+            "results": data_chunk
         }
 
+        payload_size = len(str(payload))
         print(f"[DEBUG] API isteği gönderiliyor: {url}")
-        print(f"[DEBUG] Payload boyutu: {len(str(payload))} karakter")
+        print(f"[DEBUG] Payload boyutu: {payload_size} karakter")
         
         response = requests.post(url, headers=headers, json=payload)
 
