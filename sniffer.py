@@ -47,30 +47,6 @@ with open(config_path, "r") as f:
 
 def log_message(packet_data):
     try:
-        # Paket sayısı kontrolü - çok büyük olmaması için bölme işlemi
-        if len(packet_data) > 500:
-            print(f"[DEBUG] Çok fazla paket var ({len(packet_data)}). Paketler daha küçük parçalara bölünüyor...")
-            
-            # Paketleri 500'lük gruplar halinde böl
-            chunks = [packet_data[i:i+500] for i in range(0, len(packet_data), 500)]
-            success_count = 0
-            
-            for i, chunk in enumerate(chunks):
-                print(f"[DEBUG] Parça {i+1}/{len(chunks)} gönderiliyor ({len(chunk)} paket)...")
-                if send_log_to_api(chunk):
-                    success_count += 1
-            
-            print(f"[DEBUG] Toplamda {success_count}/{len(chunks)} parça başarıyla gönderildi.")
-            return success_count > 0
-        else:
-            # Tek parça olarak gönder
-            return send_log_to_api(packet_data)
-    except Exception as e:
-        print(f"[DEBUG] Paket bölme işleminde hata: {str(e)}")
-        return False
-
-def send_log_to_api(data_chunk):
-    try:
         url = config_file['api_url'] + "sniffer-log/"
 
         headers = {
@@ -80,27 +56,21 @@ def send_log_to_api(data_chunk):
 
         payload = {
             "license_key": config_file['license_key'],
-            "results": data_chunk
+            "results": [packet_data]
         }
 
-        payload_size = len(str(payload))
-        print(f"[DEBUG] API isteği gönderiliyor: {url}")
-        print(f"[DEBUG] Payload boyutu: {payload_size} karakter")
-        
         response = requests.post(url, headers=headers, json=payload)
 
         if response.status_code == 201:
-            print(f"[DEBUG] API yanıtı: HTTP {response.status_code}")
             print("Network Scan log saved successfully.")
-            return True
         else:
-            print(f"[DEBUG] API yanıtı: HTTP {response.status_code}")
             print(f"Network Scan log save failed: {response.status_code}\nError: {response.text}")
-            return False
+            print("Exiting...")
+            sys.exit()
     except Exception as e:
-        print(f"[DEBUG] API isteği sırasında istisna: {str(e)}")
         print(f"Network Scan log save error: {e}")
-        return False
+        print("Exiting...")
+        sys.exit()
 
 def is_scanner_running():
     return os.path.exists("scanner_running.signal")
@@ -120,9 +90,7 @@ def log_writer_thread():
     
     current_log_file = initialize_log_file(get_log_filename())
     last_rotation_time = time.time()
-    print(f"[DEBUG] İlk başlatma zamanı: {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
     log_data = []
-    rotation_counter = 0
     
     while True:
         try:
@@ -132,11 +100,6 @@ def log_writer_thread():
             
             # Şu anki zaman
             current_time = time.time()
-            time_diff = current_time - last_rotation_time
-            
-            # Her 30 saniyede bir durumu loglayalım
-            if int(time_diff) % 30 == 0 and int(time_diff) > 0:
-                print(f"[DEBUG] Geçen süre: {int(time_diff)} saniye. Son rotasyon: {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
             
             # Log dosyasını periyodik olarak yaz ve gerekirse rotasyon yap
             if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL or len(log_data) >= 1000:
@@ -159,52 +122,13 @@ def log_writer_thread():
                     # Geçici dosyayı asıl dosyaya taşı
                     os.replace(temp_file, current_log_file)
                     
-                    # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur ve API'ye gönder
+                    # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur
                     if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
-                        rotation_counter += 1
-                        print(f"[DEBUG] {rotation_counter}. ROTASYON ZAMANI - Geçen süre: {int(current_time - last_rotation_time)} saniye")
-                        
-                        # Gönderim öncesi log boyutunu kontrol et
-                        log_data_size = len(str(existing_data))
-                        print(f"[DEBUG] Toplam log boyutu: {log_data_size} karakter, {len(existing_data)} paket")
-                        
                         if not is_scanner_running() and existing_data:
-                            print(f"[DEBUG] API'ye gönderim başlatılıyor! Paket sayısı: {len(existing_data)}")
-                            
-                            # Önceki dosyanın yedeğini al (debug için)
-                            backup_file = f"{current_log_file}.backup"
-                            with open(backup_file, 'w') as f:
-                                json.dump(existing_data, f, indent=2)
-                            print(f"[DEBUG] Önceki verinin yedeği alındı: {backup_file}")
-                            
-                            # Verileri API'ye gönder
+                            print(f"2 dakikalık süre doldu. {len(existing_data)} paket verisi API'ye gönderiliyor...")
                             log_message(existing_data)
-                            print(f"[DEBUG] API'ye gönderim tamamlandı!")
-                            
-                            # Mevcut log dosyasını temizle - çok önemli!
-                            existing_data = []
-                        else:
-                            print(f"[DEBUG] API'ye gönderim yapılmadı! Scanner çalışıyor: {is_scanner_running()}, Veri boş mu: {len(existing_data) == 0}")
-                        
-                        # Rotasyon zamanını güncelle
-                        old_rotation_time = last_rotation_time
-                        
-                        # Yeni log dosyasına geç
-                        old_log_file = current_log_file
                         current_log_file = initialize_log_file(get_log_filename())
-                        
-                        # Bu kısımda eski dosyada kalan veriler boşaltılmış olmalı, sadece yeni paketleri ekle
-                        if existing_data:
-                            # Yeni oluşturulan dosyaya eski verileri aktarma - artık boş olmalı
-                            temp_file = f"{current_log_file}.tmp"
-                            with open(temp_file, 'w') as f:
-                                json.dump(existing_data, f, indent=2)
-                            os.replace(temp_file, current_log_file)
-                        
-                        # Rotasyon zamanını güncelle
                         last_rotation_time = current_time
-                        print(f"[DEBUG] Rotasyon zamanı güncellendi: {datetime.fromtimestamp(old_rotation_time).strftime('%H:%M:%S')} -> {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
-                        print(f"[DEBUG] Log dosyası değiştirildi: {os.path.basename(old_log_file)} -> {os.path.basename(current_log_file)}")
                     
                     # Log listesini temizle
                     log_data = []
@@ -212,14 +136,7 @@ def log_writer_thread():
             log_queue.task_done()
             
         except queue.Empty:
-            # Timeout olduğunda, elimizdeki logları yaz ve zamana göre log rotasyonu yap
-            current_time = time.time()
-            time_diff = current_time - last_rotation_time
-            
-            # Her 30 saniyede bir durumu loglayalım (timeout durumunda)
-            if int(time_diff) % 30 == 0 and int(time_diff) > 0:
-                print(f"[DEBUG] [TIMEOUT] Geçen süre: {int(time_diff)} saniye. Son rotasyon: {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
-            
+            # Timeout olduğunda, elimizdeki logları yaz
             if log_data:
                 with log_writer_lock:
                     with open(current_log_file, 'r') as f:
@@ -236,61 +153,6 @@ def log_writer_thread():
                     
                     os.replace(temp_file, current_log_file)
                     log_data = []
-            
-            # Paket gelmese bile 2 dakika geçtiyse log rotasyonu ve gönderimi yap
-            if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
-                rotation_counter += 1
-                print(f"[DEBUG] [TIMEOUT] {rotation_counter}. ROTASYON ZAMANI - Geçen süre: {int(current_time - last_rotation_time)} saniye")
-                
-                with log_writer_lock:
-                    with open(current_log_file, 'r') as f:
-                        try:
-                            existing_data = json.load(f)
-                        except json.JSONDecodeError:
-                            existing_data = []
-                    
-                    # Gönderim öncesi log boyutunu kontrol et
-                    log_data_size = len(str(existing_data))
-                    print(f"[DEBUG] [TIMEOUT] Toplam log boyutu: {log_data_size} karakter, {len(existing_data)} paket")
-                    
-                    if not is_scanner_running() and existing_data:
-                        print(f"[DEBUG] [TIMEOUT] API'ye gönderim başlatılıyor! Paket sayısı: {len(existing_data)}")
-                        
-                        # Önceki dosyanın yedeğini al (debug için)
-                        backup_file = f"{current_log_file}.backup"
-                        with open(backup_file, 'w') as f:
-                            json.dump(existing_data, f, indent=2)
-                        print(f"[DEBUG] [TIMEOUT] Önceki verinin yedeği alındı: {backup_file}")
-                        
-                        try:
-                            log_message(existing_data)
-                            print(f"[DEBUG] [TIMEOUT] API'ye gönderim tamamlandı!")
-                        except Exception as e:
-                            print(f"[DEBUG] [TIMEOUT] API'ye gönderimde HATA: {str(e)}")
-                        
-                        # Mevcut log dosyasını temizle - çok önemli!
-                        existing_data = []
-                    else:
-                        print(f"[DEBUG] [TIMEOUT] API'ye gönderim yapılmadı! Scanner çalışıyor: {is_scanner_running()}, Veri boş mu: {len(existing_data) == 0}")
-                    
-                    # Rotasyon zamanını güncelle
-                    old_rotation_time = last_rotation_time
-                    
-                    # Yeni log dosyasına geç
-                    old_log_file = current_log_file
-                    current_log_file = initialize_log_file(get_log_filename())
-                    
-                    # Bu kısımda eski dosyada kalan veriler boşaltılmış olmalı, sadece yeni paketleri ekle
-                    if existing_data:
-                        # Yeni oluşturulan dosyaya eski verileri aktarma - artık boş olmalı
-                        temp_file = f"{current_log_file}.tmp"
-                        with open(temp_file, 'w') as f:
-                            json.dump(existing_data, f, indent=2)
-                        os.replace(temp_file, current_log_file)
-                    
-                    last_rotation_time = current_time
-                    print(f"[DEBUG] [TIMEOUT] Rotasyon zamanı güncellendi: {datetime.fromtimestamp(old_rotation_time).strftime('%H:%M:%S')} -> {datetime.fromtimestamp(last_rotation_time).strftime('%H:%M:%S')}")
-                    print(f"[DEBUG] [TIMEOUT] Log dosyası değiştirildi: {os.path.basename(old_log_file)} -> {os.path.basename(current_log_file)}")
         
         except Exception as e:
             print(f"Log yazarken hata: {e}")
@@ -350,8 +212,7 @@ def main():
                     packet_data['icmp_packet'] = {
                         'type': icmp_type,
                         'code': code,
-                        'checksum': checksum,
-                        'data': format_multi_line("", data, hex=False)
+                        'checksum': checksum
                     }
                     # print(TAB_1 + 'ICMP Packet:')
                     # print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
@@ -371,8 +232,7 @@ def main():
                             'RST': flag_rst,
                             'SYN': flag_syn,
                             'FIN': flag_fin
-                        },
-                        'data': format_multi_line("", data, hex=False)
+                        }
                     }
                     # print(TAB_1 + 'TCP Segment:')
                     # print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
@@ -386,8 +246,7 @@ def main():
                     packet_data['udp_segment'] = {
                         'source_port': src_port,
                         'destination_port': dest_port,
-                        'size': length,
-                        'data': format_multi_line("", data, hex=False)
+                        'size': length
                     }
                     # print(TAB_1 + 'UDP Segment:')
                     # print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
@@ -440,7 +299,7 @@ def udp_segment(data):
     src_port, dest_port, size = struct.unpack('! H H 2x H', data[:8])
     return src_port, dest_port, size, data[8:]
 
-def format_multi_line(prefix, string, size=80, hex=True):
+def format_multi_line(prefix, string, size=80):
     """
     Veriyi hem hex dump hem de ASCII formatında gösterir.
     
@@ -448,34 +307,31 @@ def format_multi_line(prefix, string, size=80, hex=True):
         prefix: Her satırın başına eklenecek metin
         string: Formatlanacak bytes veya string verisi
         size: Her satırın maksimum uzunluğu
-        hex: True ise hem hex hem ASCII gösterir, False ise sadece ASCII gösterir
         
     Returns:
         Formatlanmış veri metni
     """
     if isinstance(string, bytes):
+        # HEX ve ASCII formatını birlikte göster
         result = []
         for offset in range(0, len(string), 16):
+            # Satır başında hex offset'i göster
+            hex_offset = f"{offset:04x}"
+            line = f"{hex_offset}  "
+            
             # 16 byte'lık bir blok al
             chunk = string[offset:offset+16]
             
-            if hex:
-                # Satır başında hex offset'i göster
-                hex_offset = f"{offset:04x}"
-                line = f"{hex_offset}  "
-                
-                # Hex formatını oluştur (8'li gruplar halinde)
-                hex_line = ""
-                for i, b in enumerate(chunk):
-                    if i == 8:  # 8. byte'tan sonra ekstra boşluk ekle
-                        hex_line += " "
-                    hex_line += f"{b:02x} "
-                
-                # Hex satırını tamamla (eksik byte'lar için boşluk)
-                hex_line = hex_line.ljust(49, ' ')  # 16 byte için 3 karakter/byte + ekstra boşluk
-                line += hex_line
-            else:
-                line = "ASCII: "
+            # Hex formatını oluştur (8'li gruplar halinde)
+            hex_line = ""
+            for i, b in enumerate(chunk):
+                if i == 8:  # 8. byte'tan sonra ekstra boşluk ekle
+                    hex_line += " "
+                hex_line += f"{b:02x} "
+            
+            # Hex satırını tamamla (eksik byte'lar için boşluk)
+            hex_line = hex_line.ljust(49, ' ')  # 16 byte için 3 karakter/byte + ekstra boşluk
+            line += hex_line
             
             # ASCII kısmını ekle
             ascii_part = ""
