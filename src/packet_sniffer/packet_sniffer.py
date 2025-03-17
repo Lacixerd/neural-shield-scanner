@@ -158,41 +158,40 @@ def log_writer_thread():
             print(f"Log yazarken hata: {e}")
             time.sleep(1)
 
-def get_local_ip_addresses():
-    """Sistemdeki tüm yerel IP adreslerini getirir."""
-    local_ips = set()
-    try:
-        # Tüm ağ arayüzlerini kontrol etme
-        for interface in socket.if_nameindex():
-            try:
-                # IPv4 adreslerini alma
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                ip = socket.inet_ntoa(socket.ioctl(
-                    s.fileno(),
-                    0x8915,  # SIOCGIFADDR
-                    struct.pack('256s', interface[1][:15].encode())
-                )[20:24])
-                local_ips.add(ip)
-            except OSError:
-                # Bazı arayüzler IP adresine sahip olmayabilir
-                pass
-    except Exception as e:
-        print(f"Yerel IP adresleri alınırken hata: {e}")
-    
-    # Loopback adresini her zaman ekle
-    local_ips.add('127.0.0.1')
-    return local_ips
-
 def main():
     # Yerel IP adreslerini al
-    local_ip_addresses = get_local_ip_addresses()
-    print(f"Filtrelenen yerel IP adresleri: {local_ip_addresses}")
+    local_ip_addresses = "192.168.1.11"
     
     # Log writer thread'ini başlat
     log_thread = threading.Thread(target=log_writer_thread, daemon=True)
     log_thread.start()
     
+    # Ağ arayüzünü promiscuous moda alın
     conn = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
+    
+    # Ağ kartını promiscuous moda almak (isteğe bağlı olarak kullanılabilir)
+    try:
+        import fcntl
+        # ETH_P_ALL protokolü ve PROMISC modu ayarlama
+        SIOCGIFFLAGS = 0x8913
+        SIOCSIFFLAGS = 0x8914
+        IFF_PROMISC = 0x100
+        
+        ifname = 'eth0'  # Ağ arayüzünün adını buraya yazın (örn. eth0, ens33, etc.)
+        ifreq = struct.pack('16sH', ifname.encode(), 0)
+        flags = struct.unpack('16sH', fcntl.ioctl(conn.fileno(), SIOCGIFFLAGS, ifreq))[1]
+        
+        # Promiscuous modu etkinleştir
+        flags |= IFF_PROMISC
+        ifreq = struct.pack('16sH', ifname.encode(), flags)
+        fcntl.ioctl(conn.fileno(), SIOCSIFFLAGS, ifreq)
+        print(f"{ifname} arayüzü promiscuous moda alındı.")
+    except Exception as e:
+        print(f"Promiscuous mod etkinleştirilemedi: {e}")
+        print("Sadece bilgisayarınıza doğrudan gelen/giden paketleri görebilirsiniz.")
+
+    # Filtrelemek istediğiniz IP'leri özelleştirme (opsiyonel)
+    filter_local_traffic = True  # Yerel trafiği filtrelemek için True, tüm trafiği görmek için False
 
     def write_to_json(packet_data):
         if is_scanner_running():
@@ -209,8 +208,6 @@ def main():
                 
             raw_data, addr = conn.recvfrom(65536)
             dest_mac, src_mac, eth_proto, data = ethernet_frame(raw_data)
-            # print('\nEthernet Frame:')
-            # print(TAB_1 +'Destination: {}, Source: {}, Protocol: {}'.format(dest_mac, src_mac, eth_proto))
             
             packet_data = {
                 'timestamp': datetime.now().isoformat(),
@@ -225,8 +222,8 @@ def main():
             if eth_proto == 8:
                 (version, header_length, ttl, proto, src, target, data) = ipv4_packet(data)
                 
-                # Yerel IP adresi filtreleme kontrolü
-                if src in local_ip_addresses or target in local_ip_addresses:
+                # Eğer filtreleme aktifse ve paket yerel IP adreslerinden birini içeriyorsa atla
+                if filter_local_traffic and (src in local_ip_addresses or target in local_ip_addresses):
                     # Yerel IP adresine gelen veya giden paketi atla
                     continue
                 
@@ -354,15 +351,14 @@ def format_multi_line(prefix, string, size=80, hex=False):
         # HEX ve ASCII formatını birlikte göster
         result = []
         for offset in range(0, len(string), 16):
+            # 16 byte'lık bir blok al
+            chunk = string[offset:offset+16]
             
             if hex:  
                 # Satır başında hex offset'i göster
                 hex_offset = f"{offset:04x}"
                 line = f"{hex_offset}  "
 
-                # 16 byte'lık bir blok al
-                chunk = string[offset:offset+16]
-                
                 # Hex formatını oluştur (8'li gruplar halinde)
                 hex_line = ""
                 for i, b in enumerate(chunk):
