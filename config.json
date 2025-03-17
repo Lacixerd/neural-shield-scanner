@@ -14,6 +14,6 @@
     "ids_log": "config"
   },
   "license_key": "",
-  "api_token": "24bc9c716846e8372371020d20cc5c625e564c27",
-  "api_url": "https://neuralshieldai.com/apis/"
+  "api_token": "",
+  "api_url": "https://neuralshieldai.com/api/"
 }
