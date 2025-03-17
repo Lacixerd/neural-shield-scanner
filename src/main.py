@@ -82,6 +82,10 @@ if __name__ == "__main__":
                 response = requests.post(url, headers=headers, json=payload)
                 if response.status_code == 200:
                     print("License key authorized successfully.")
+                    try:
+                        print(f"Subscription expiration date: {response['expire_date']}")
+                    except:
+                        pass
                 else:
                     print(f"License key authorization failed: {response.status_code}\nError: {response.text}\nCheck your subscription status at https://neuralshieldai.com/.")
                     with open(config_path, 'w') as f:
