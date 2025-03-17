@@ -56,7 +56,7 @@ def log_message(packet_data):
 
         payload = {
             "license_key": config_file['license_key'],
-            "results": [packet_data]
+            "results": packet_data
         }
 
         response = requests.post(url, headers=headers, json=payload)
@@ -108,7 +108,6 @@ def log_writer_thread():
                     with open(current_log_file, 'r') as f:
                         try:
                             existing_data = json.load(f)
-                            log_message(existing_data)
                         except json.JSONDecodeError:
                             existing_data = []
                     
@@ -123,7 +122,7 @@ def log_writer_thread():
                     # Geçici dosyayı asıl dosyaya taşı
                     os.replace(temp_file, current_log_file)
                     
-                    # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur
+                    # Eğer 2 dakika geçtiyse, yeni log dosyası oluştur ve API'ye gönder
                     if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
                         if not is_scanner_running() and existing_data:
                             print(f"2 dakikalık süre doldu. {len(existing_data)} paket verisi API'ye gönderiliyor...")
@@ -137,7 +136,9 @@ def log_writer_thread():
             log_queue.task_done()
             
         except queue.Empty:
-            # Timeout olduğunda, elimizdeki logları yaz
+            # Timeout olduğunda, elimizdeki logları yaz ve zamana göre log rotasyonu yap
+            current_time = time.time()
+            
             if log_data:
                 with log_writer_lock:
                     with open(current_log_file, 'r') as f:
@@ -154,6 +155,22 @@ def log_writer_thread():
                     
                     os.replace(temp_file, current_log_file)
                     log_data = []
+            
+            # Paket gelmese bile 2 dakika geçtiyse log rotasyonu ve gönderimi yap
+            if current_time - last_rotation_time >= LOG_ROTATION_INTERVAL:
+                with log_writer_lock:
+                    with open(current_log_file, 'r') as f:
+                        try:
+                            existing_data = json.load(f)
+                        except json.JSONDecodeError:
+                            existing_data = []
+                    
+                    if not is_scanner_running() and existing_data:
+                        print(f"2 dakikalık süre doldu. {len(existing_data)} paket verisi API'ye gönderiliyor...")
+                        log_message(existing_data)
+                    
+                    current_log_file = initialize_log_file(get_log_filename())
+                    last_rotation_time = current_time
         
         except Exception as e:
             print(f"Log yazarken hata: {e}")
@@ -338,7 +355,7 @@ def format_multi_line(prefix, string, size=80, hex=True):
                 hex_line = hex_line.ljust(49, ' ')  # 16 byte için 3 karakter/byte + ekstra boşluk
                 line += hex_line
             else:
-                line = ""
+                line = "ASCII: "
             
             # ASCII kısmını ekle
             ascii_part = ""
