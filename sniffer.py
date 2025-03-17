@@ -17,6 +17,7 @@ import sys
 import threading
 import queue
 import requests
+
 TAB_1 = '\t - '
 TAB_2 = '\t\t - '
 TAB_3 = '\t\t\t - '
@@ -34,7 +35,14 @@ current_log_file = None
 last_rotation_time = 0
 log_writer_lock = threading.Lock()
 
-with open('config.json', 'r') as f:
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+config_path = os.path.join(BASE_DIR, 'config.json')
+
+with open(config_path, "r") as f:
     config_file = json.load(f)
 
 def log_message(packet_data):
