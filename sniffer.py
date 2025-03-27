@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-Ağ Güvenliği Paket Yakalayıcı
-------------------------------
-Tüm ağ trafiğini izleyen ve potansiyel tehdit oluşturan paketleri tespit eden
-gelişmiş bir paket yakalama aracı.
+Ağ Paket Yakalayıcı
+-------------------
+Tüm ağ trafiğini izleyen ve paketleri yakalayan gelişmiş bir paket yakalama aracı.
 
 Bu araç, ham soketler kullanarak düşük seviyede paket yakalama yapar ve
-güvenlik açısından şüpheli olabilecek paketleri tespit eder.
+tüm paketleri detaylı olarak gösterir.
 """
 
 import socket
@@ -19,7 +18,7 @@ import os
 import argparse
 import json
 import binascii
-from collections import defaultdict, Counter
+from collections import defaultdict
 from datetime import datetime
 
 # Renklendirme için terminalde renkli çıktı
@@ -33,21 +32,9 @@ WHITE = '\033[97m'
 RESET = '\033[0m'
 BOLD = '\033[1m'
 
-# Tehdit tespiti için yapılandırma
-PORT_SCAN_THRESHOLD = 10  # Tarama tespiti için eşik değeri
-PORT_SCAN_WINDOW = 5  # Tarama tespiti için zaman penceresi (saniye)
-SUSPICIOUS_FLAG_PATTERNS = {
-    'null_scan': 0x00,  # Hiçbir bayrak ayarlanmamış
-    'fin_scan': 0x01,   # Sadece FIN bayrağı
-    'xmas_scan': 0x29,  # FIN, PSH, URG bayrakları 
-    'syn_fin': 0x03     # SYN ve FIN birlikte (geçersiz)
-}
-
 # Global değişkenler
 total_packets = 0
 ip_protocols = {}  # Protokollerin sayısını takip eder
-src_ip_ports = defaultdict(lambda: {'ports': set(), 'timestamp': time.time()})
-detected_threats = []
 packet_stats = {
     'tcp': 0,
     'udp': 0,
@@ -169,14 +156,12 @@ def format_output(prefix, msg, color=WHITE):
 
 def print_ethernet_frame(frame):
     """Ethernet çerçevesi bilgilerini yazdırır"""
-    if args.verbose:
-        print(format_output("[ETH]", f"Kaynak MAC: {frame.src_mac} -> Hedef MAC: {frame.dest_mac}", BLUE))
+    print(format_output("[ETH]", f"Kaynak MAC: {frame.src_mac} -> Hedef MAC: {frame.dest_mac}", BLUE))
 
 
 def print_ipv4_packet(packet):
     """IPv4 paketi bilgilerini yazdırır"""
-    if args.verbose:
-        print(format_output("[IPv4]", f"Kaynak IP: {packet.src} -> Hedef IP: {packet.target} (TTL: {packet.ttl})", GREEN))
+    print(format_output("[IPv4]", f"Kaynak IP: {packet.src} -> Hedef IP: {packet.target} (TTL: {packet.ttl})", GREEN))
 
 
 def print_tcp_segment(segment):
@@ -191,16 +176,14 @@ def print_tcp_segment(segment):
     
     flags_str = ' '.join(flags) if flags else "None"
     
-    if args.verbose or segment.is_http:
-        print(format_output("[TCP]", 
-              f"Port: {segment.src_port} -> {segment.dest_port} | "
-              f"Flags: {flags_str}", YELLOW))
+    print(format_output("[TCP]", 
+          f"Port: {segment.src_port} -> {segment.dest_port} | "
+          f"Flags: {flags_str}", YELLOW))
 
 
 def print_udp_segment(segment):
     """UDP segmenti bilgilerini yazdırır"""
-    if args.verbose or segment.is_dns:
-        print(format_output("[UDP]", f"Port: {segment.src_port} -> {segment.dest_port} | Boyut: {segment.size}", MAGENTA))
+    print(format_output("[UDP]", f"Port: {segment.src_port} -> {segment.dest_port} | Boyut: {segment.size}", MAGENTA))
 
 
 def print_icmp_packet(packet):
@@ -216,80 +199,7 @@ def print_icmp_packet(packet):
     
     type_str = icmp_types.get(packet.type, f"Tip {packet.type}")
     
-    if args.verbose:
-        print(format_output("[ICMP]", f"{type_str} | Kod: {packet.code}", CYAN))
-
-
-def check_port_scan(ip, port, timestamp):
-    """
-    Port tarama tespiti
-    Bir IP adresinden kısa süre içinde çok sayıda farklı porta
-    yapılan bağlantıları tespit eder
-    """
-    global src_ip_ports, detected_threats
-    
-    data = src_ip_ports[ip]
-    current_time = timestamp
-    
-    # Zaman penceresi dışına çıktıysa sıfırla
-    if current_time - data['timestamp'] > PORT_SCAN_WINDOW:
-        data['ports'] = {port}
-        data['timestamp'] = current_time
-    else:
-        data['ports'].add(port)
-    
-    # Port taraması tespit edildi mi?
-    if len(data['ports']) > PORT_SCAN_THRESHOLD:
-        threat = {
-            'timestamp': datetime.fromtimestamp(current_time).isoformat(),
-            'type': 'PORT_SCAN',
-            'source_ip': ip,
-            'details': f"{len(data['ports'])} farklı porta {PORT_SCAN_WINDOW} saniye içinde erişim"
-        }
-        # Aynı tehdidi tekrar rapor etmemek için kontrol
-        if not any(t['type'] == 'PORT_SCAN' and t['source_ip'] == ip for t in detected_threats[-10:]):
-            detected_threats.append(threat)
-            print(format_output("[TEHDİT]", 
-                  f"Port Tarama Tespiti - Kaynak: {ip}, "
-                  f"{len(data['ports'])} port içinde {PORT_SCAN_WINDOW}s", RED + BOLD))
-            # Tespit sonrası sıfırla
-            data['ports'] = set()
-
-
-def check_suspicious_flags(flags, src_ip, dst_ip, src_port, dst_port, timestamp):
-    """Şüpheli TCP bayrak kombinasyonlarını kontrol eder"""
-    global detected_threats
-    
-    # Şüpheli bayrak kalıplarını kontrol et
-    if flags == SUSPICIOUS_FLAG_PATTERNS['null_scan']:
-        flag_type = "NULL Scan"
-        is_suspicious = True
-    elif flags == SUSPICIOUS_FLAG_PATTERNS['fin_scan']:
-        flag_type = "FIN Scan"
-        is_suspicious = True
-    elif flags == SUSPICIOUS_FLAG_PATTERNS['xmas_scan']:
-        flag_type = "XMAS Scan"
-        is_suspicious = True
-    elif flags == SUSPICIOUS_FLAG_PATTERNS['syn_fin']:
-        flag_type = "SYN+FIN (Geçersiz)"
-        is_suspicious = True
-    else:
-        is_suspicious = False
-    
-    if is_suspicious:
-        threat = {
-            'timestamp': datetime.fromtimestamp(timestamp).isoformat(),
-            'type': 'SUSPICIOUS_FLAGS',
-            'source_ip': src_ip,
-            'dest_ip': dst_ip,
-            'source_port': src_port,
-            'dest_port': dst_port,
-            'flag_type': flag_type
-        }
-        detected_threats.append(threat)
-        print(format_output("[TEHDİT]", 
-              f"Şüpheli TCP Bayrakları ({flag_type}) - "
-              f"{src_ip}:{src_port} -> {dst_ip}:{dst_port}", RED + BOLD))
+    print(format_output("[ICMP]", f"{type_str} | Kod: {packet.code}", CYAN))
 
 
 def get_available_interfaces():
@@ -337,6 +247,10 @@ def packet_handler():
             raw_data, addr = conn.recvfrom(65536)
             total_packets += 1
             
+            # Paket zaman damgası
+            paket_zaman = datetime.fromtimestamp(current_time).strftime('%H:%M:%S.%f')[:-3]
+            print(f"\n{BOLD}{paket_zaman}{RESET} - Paket #{total_packets}")
+            
             # Ethernet çerçevesini ayrıştır
             eth = EthernetFrame(raw_data)
             print_ethernet_frame(eth)
@@ -361,12 +275,10 @@ def packet_handler():
                         http_data = tcp.data[:100].decode('utf-8', 'ignore').replace('\n', ' ')
                         print(format_output("[HTTP]", http_data, CYAN))
                     
-                    # Port tarama tespiti
-                    check_port_scan(ipv4.src, tcp.dest_port, current_time)
-                    
-                    # Şüpheli TCP bayrak tespiti
-                    check_suspicious_flags(tcp.flags, ipv4.src, ipv4.target, 
-                                          tcp.src_port, tcp.dest_port, current_time)
+                    # Paket içeriğini göster (ilk 16 byte hex formatında)
+                    if len(tcp.data) > 0:
+                        data_hex = binascii.hexlify(tcp.data[:16]).decode('utf-8')
+                        print(format_output("[İÇERİK]", f"Hex: {data_hex}...", WHITE))
                 
                 # UDP
                 elif ipv4.proto == 17:  # UDP
@@ -381,6 +293,11 @@ def packet_handler():
                         if dns.domain:
                             query_type = "Sorgu" if dns.is_query else "Yanıt"
                             print(format_output("[DNS]", f"{query_type}: {dns.domain}", CYAN))
+                    
+                    # Paket içeriğini göster (ilk 16 byte hex formatında)
+                    if len(udp.data) > 0:
+                        data_hex = binascii.hexlify(udp.data[:16]).decode('utf-8')
+                        print(format_output("[İÇERİK]", f"Hex: {data_hex}...", WHITE))
                 
                 # ICMP
                 elif ipv4.proto == 1:  # ICMP
@@ -391,16 +308,17 @@ def packet_handler():
                 # Diğer protokoller
                 else:
                     packet_stats['other'] += 1
-                    if args.verbose:
-                        print(format_output("[PROTO]", f"Protokol: {ipv4.proto}", WHITE))
+                    print(format_output("[PROTO]", f"Protokol: {ipv4.proto}", WHITE))
             
-            # Her 1000 pakette bir istatistikleri göster
-            if total_packets % 1000 == 0:
+            # Her 100 pakette bir istatistikleri göster
+            if total_packets % 100 == 0:
+                print("\n" + "="*50)
                 print(format_output("[İSTATİSTİK]", 
                       f"Toplam Paket: {total_packets} | "
                       f"TCP: {packet_stats['tcp']} | UDP: {packet_stats['udp']} | "
                       f"ICMP: {packet_stats['icmp']} | DNS: {packet_stats['dns']} | "
                       f"HTTP: {packet_stats['http']}", GREEN))
+                print("="*50)
     
     except KeyboardInterrupt:
         print(format_output("\n[DURDUR]", "Kullanıcı tarafından durduruldu", YELLOW))
@@ -408,9 +326,6 @@ def packet_handler():
     finally:
         # Sonuçları göster
         show_results(start_time)
-        
-        # Güvenlik tehditleri raporu
-        show_threats_report()
         
         # İstenirse JSON raporu oluştur
         if args.output:
@@ -434,43 +349,6 @@ def show_results(start_time):
             print(format_output(f"[{proto.upper()}]", f"{count} paket ({percent:.1f}%)", BLUE))
 
 
-def show_threats_report():
-    """Tespit edilen tehditleri gösterir"""
-    if not detected_threats:
-        print("\n" + format_output("[GÜVENLİK]", "Hiçbir tehdit tespit edilmedi", GREEN + BOLD))
-        return
-    
-    print("\n" + format_output("[TEHDİT RAPORU]", f"{len(detected_threats)} potansiyel tehdit tespit edildi", RED + BOLD))
-    
-    # Tehdit türlerine göre sınıflandır
-    threat_types = {}
-    for threat in detected_threats:
-        t_type = threat['type']
-        if t_type not in threat_types:
-            threat_types[t_type] = []
-        threat_types[t_type].append(threat)
-    
-    # Her tehdit türü için özet göster
-    for t_type, threats in threat_types.items():
-        print(format_output(f"[{t_type}]", f"{len(threats)} olay", RED))
-        
-        # En fazla 5 örnek göster
-        for i, threat in enumerate(threats[:5]):
-            if t_type == 'PORT_SCAN':
-                print(format_output(f"  {i+1}.", 
-                      f"Kaynak: {threat['source_ip']} - {threat['details']} - "
-                      f"Zaman: {threat['timestamp']}", YELLOW))
-            elif t_type == 'SUSPICIOUS_FLAGS':
-                print(format_output(f"  {i+1}.", 
-                      f"{threat['flag_type']} - "
-                      f"{threat['source_ip']}:{threat['source_port']} -> "
-                      f"{threat['dest_ip']}:{threat['dest_port']} - "
-                      f"Zaman: {threat['timestamp']}", YELLOW))
-        
-        if len(threats) > 5:
-            print(format_output("  ...", f"ve {len(threats)-5} daha", YELLOW))
-
-
 def save_report(start_time, filename):
     """Sonuçları JSON formatında kaydeder"""
     duration = time.time() - start_time
@@ -480,8 +358,7 @@ def save_report(start_time, filename):
         'duration': duration,
         'total_packets': total_packets,
         'packet_rate': total_packets/duration if duration > 0 else 0,
-        'packet_stats': packet_stats,
-        'detected_threats': detected_threats
+        'packet_stats': packet_stats
     }
     
     try:
@@ -500,13 +377,14 @@ if __name__ == "__main__":
         sys.exit(1)
     
     # Komut satırı argümanlarını işleme
-    parser = argparse.ArgumentParser(description="Ağ Güvenliği Paket Yakalayıcı")
+    parser = argparse.ArgumentParser(description="Ağ Paket Yakalayıcı")
     parser.add_argument('-i', '--interface', help='Dinlenecek ağ arayüzü (örn: eth0)')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Ayrıntılı çıktı modunu etkinleştir')
+    parser.add_argument('-v', '--verbose', action='store_true', default=True, help='Ayrıntılı çıktı modunu etkinleştir')
     parser.add_argument('-d', '--duration', type=int, default=0, 
                         help='Yakalama süresi (saniye, 0=sınırsız)')
     parser.add_argument('-o', '--output', help='JSON rapor çıktı dosyası')
     parser.add_argument('-l', '--list', action='store_true', help='Kullanılabilir ağ arayüzlerini listele')
+    parser.add_argument('-r', '--raw', action='store_true', help='Paket içeriğini ham olarak göster')
     
     args = parser.parse_args()
     
