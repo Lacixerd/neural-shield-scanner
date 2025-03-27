@@ -35,10 +35,21 @@ WHITE = '\033[97m'
 RESET = '\033[0m'
 BOLD = '\033[1m'
 
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+config_path = os.path.join(BASE_DIR, 'config.json')
+
+with open(config_path, "r") as f:
+    config_file = json.load(f)
+
 # API Settings
-API_URL = "https://neuralshieldai.com/api/sniffer-log/"
-API_TOKEN = "b356249be69b757744ea1895f18d433b02843a6a"
-LOG_INTERVAL = 120  # 2 minutes (in seconds)
+API_URL = config_file['api_url'] + "sniffer-log/"
+API_TOKEN = config_file['api_token']
+LICENSE_KEY = config_file['license_key']
+LOG_INTERVAL = 120
 
 # Global variables
 total_packets = 0
@@ -266,7 +277,7 @@ def send_logs_to_api():
     }
 
     payload = {
-        "license_key": "0fb849761fb947ad37190e2ff7b32d01",
+        "license_key": LICENSE_KEY,
         "results": logs_to_send
     }
     
@@ -552,20 +563,10 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output', help='JSON report output file')
     parser.add_argument('-l', '--list', action='store_true', help='List available network interfaces')
     parser.add_argument('-r', '--raw', action='store_true', help='Show raw packet content')
-    parser.add_argument('--api-url', default=API_URL, help='API URL (default: {})'.format(API_URL))
-    parser.add_argument('--api-token', default=API_TOKEN, help='API Token')
-    parser.add_argument('--log-interval', type=int, default=LOG_INTERVAL, 
-                        help='Log submission interval (seconds, default: {})'.format(LOG_INTERVAL))
     
     args = parser.parse_args()
     
     # Update API settings from command line
-    if args.api_url:
-        API_URL = args.api_url
-    if args.api_token:
-        API_TOKEN = args.api_token
-    if args.log_interval:
-        LOG_INTERVAL = args.log_interval
     
     # List interfaces and exit
     if args.list:
