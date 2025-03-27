@@ -260,15 +260,19 @@ def send_logs_to_api():
     print(format_output("[API]", f"{len(logs_to_send)} log API'ye gönderiliyor...", CYAN))
     
     # API'ye gönderilecek veri hazırlığı
+    headers = {
+        "Authorization": f"Token {API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
     payload = {
-        'token': API_TOKEN,
-        'device_id': socket.gethostname(),
-        'logs': logs_to_send
+        "license_key": "0fb849761fb947ad37190e2ff7b32d01",
+        "results": logs_to_send
     }
     
     # API'ye POST isteği gönder
     try:
-        response = requests.post(API_URL, json=payload, timeout=10)
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=10)
         
         if response.status_code == 200:
             print(format_output("[API]", f"Loglar başarıyla gönderildi. Yanıt: {response.text}", GREEN))
