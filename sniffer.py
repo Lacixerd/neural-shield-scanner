@@ -7,7 +7,8 @@ Ağ Paket Yakalayıcı
 Tüm ağ trafiğini izleyen ve paketleri yakalayan gelişmiş bir paket yakalama aracı.
 
 Bu araç, ham soketler kullanarak düşük seviyede paket yakalama yapar ve
-tüm paketleri detaylı olarak gösterir.
+tüm paketleri detaylı olarak gösterir. Ayrıca toplanan logları belirtilen API URL'sine
+periyodik olarak gönderir.
 """
 
 import socket
@@ -18,6 +19,8 @@ import os
 import argparse
 import json
 import binascii
+import threading
+import requests
 from collections import defaultdict
 from datetime import datetime
 
@@ -32,6 +35,11 @@ WHITE = '\033[97m'
 RESET = '\033[0m'
 BOLD = '\033[1m'
 
+# API Ayarları
+API_URL = "https://neuralshieldai.com/api/"
+API_TOKEN = "b356249be69b757744ea1895f18d433b02843a6a"
+LOG_INTERVAL = 120  # 2 dakika (saniye cinsinden)
+
 # Global değişkenler
 total_packets = 0
 ip_protocols = {}  # Protokollerin sayısını takip eder
@@ -43,6 +51,10 @@ packet_stats = {
     'http': 0,
     'other': 0
 }
+
+# Log toplama için değişkenler
+collected_logs = []
+log_lock = threading.Lock()  # Thread güvenliği için kilit
 
 
 class EthernetFrame:
@@ -214,9 +226,87 @@ def get_available_interfaces():
     return interfaces
 
 
+def collect_log_entry(log_type, data):
+    """Log girişi oluşturup global log listesine ekler"""
+    global collected_logs
+    
+    timestamp = datetime.now().isoformat()
+    log_entry = {
+        'timestamp': timestamp,
+        'type': log_type,
+        'data': data
+    }
+    
+    # Thread güvenliği için kilit kullan
+    with log_lock:
+        collected_logs.append(log_entry)
+
+
+def send_logs_to_api():
+    """Toplanan logları API'ye gönderir"""
+    global collected_logs
+    
+    # Thread güvenliği için kilit kullan
+    with log_lock:
+        if not collected_logs:
+            print(format_output("[API]", "Gönderilecek log bulunamadı.", YELLOW))
+            return
+        
+        # Gönderilecek logları kopyala ve listeyi temizle
+        logs_to_send = collected_logs.copy()
+        collected_logs = []
+    
+    # Log sayısını göster
+    print(format_output("[API]", f"{len(logs_to_send)} log API'ye gönderiliyor...", CYAN))
+    
+    # API'ye gönderilecek veri hazırlığı
+    payload = {
+        'token': API_TOKEN,
+        'device_id': socket.gethostname(),
+        'logs': logs_to_send
+    }
+    
+    # API'ye POST isteği gönder
+    try:
+        response = requests.post(API_URL, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            print(format_output("[API]", f"Loglar başarıyla gönderildi. Yanıt: {response.text}", GREEN))
+        else:
+            print(format_output("[API]", f"Log gönderimi başarısız oldu. Durum kodu: {response.status_code}", RED))
+            print(format_output("[API]", f"Yanıt: {response.text}", RED))
+            
+            # Başarısız olursa logları geri koy
+            with log_lock:
+                collected_logs.extend(logs_to_send)
+                
+    except requests.exceptions.RequestException as e:
+        print(format_output("[API]", f"API bağlantı hatası: {str(e)}", RED))
+        
+        # Bağlantı hatası olursa logları geri koy
+        with log_lock:
+            collected_logs.extend(logs_to_send)
+
+
+def api_sender_thread():
+    """API'ye periyodik olarak log gönderen thread"""
+    print(format_output("[API]", f"Log gönderim servisi başlatıldı. Her {LOG_INTERVAL} saniyede bir loglar gönderilecek.", GREEN))
+    
+    while True:
+        # LOG_INTERVAL kadar bekle (2 dakika)
+        time.sleep(LOG_INTERVAL)
+        
+        # Logları API'ye gönder
+        send_logs_to_api()
+
+
 def packet_handler():
     """Ana paket işleme fonksiyonu. Ağı dinler ve gelen paketleri işler."""
     global total_packets, ip_protocols, packet_stats
+    
+    # API log gönderici thread'i başlat
+    api_thread = threading.Thread(target=api_sender_thread, daemon=True)
+    api_thread.start()
     
     # IPv4 için ham soket oluştur
     conn = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
@@ -260,6 +350,15 @@ def packet_handler():
                 ipv4 = IPv4Packet(eth.data)
                 print_ipv4_packet(ipv4)
                 
+                # Log kaydı oluştur - IPv4
+                ipv4_log = {
+                    'src_ip': ipv4.src,
+                    'dst_ip': ipv4.target,
+                    'ttl': ipv4.ttl,
+                    'proto': ipv4.proto
+                }
+                collect_log_entry('ipv4', ipv4_log)
+                
                 # Protokol istatistikleri güncelle
                 ip_protocols[ipv4.proto] = ip_protocols.get(ipv4.proto, 0) + 1
                 
@@ -269,11 +368,38 @@ def packet_handler():
                     tcp = TCPSegment(ipv4.data)
                     print_tcp_segment(tcp)
                     
+                    # Log kaydı oluştur - TCP
+                    tcp_log = {
+                        'src_ip': ipv4.src,
+                        'dst_ip': ipv4.target,
+                        'src_port': tcp.src_port,
+                        'dst_port': tcp.dest_port,
+                        'flags': {
+                            'urg': tcp.flag_urg,
+                            'ack': tcp.flag_ack,
+                            'psh': tcp.flag_psh,
+                            'rst': tcp.flag_rst,
+                            'syn': tcp.flag_syn,
+                            'fin': tcp.flag_fin
+                        }
+                    }
+                    collect_log_entry('tcp', tcp_log)
+                    
                     # HTTP paketi mi?
                     if tcp.is_http:
                         packet_stats['http'] += 1
                         http_data = tcp.data[:100].decode('utf-8', 'ignore').replace('\n', ' ')
                         print(format_output("[HTTP]", http_data, CYAN))
+                        
+                        # Log kaydı oluştur - HTTP
+                        http_log = {
+                            'src_ip': ipv4.src,
+                            'dst_ip': ipv4.target,
+                            'src_port': tcp.src_port,
+                            'dst_port': tcp.dest_port,
+                            'data': http_data
+                        }
+                        collect_log_entry('http', http_log)
                     
                     # Paket içeriğini göster (ilk 16 byte hex formatında)
                     if len(tcp.data) > 0:
@@ -286,6 +412,16 @@ def packet_handler():
                     udp = UDPSegment(ipv4.data)
                     print_udp_segment(udp)
                     
+                    # Log kaydı oluştur - UDP
+                    udp_log = {
+                        'src_ip': ipv4.src,
+                        'dst_ip': ipv4.target,
+                        'src_port': udp.src_port,
+                        'dst_port': udp.dest_port,
+                        'size': udp.size
+                    }
+                    collect_log_entry('udp', udp_log)
+                    
                     # DNS paketi mi?
                     if udp.is_dns:
                         packet_stats['dns'] += 1
@@ -293,6 +429,15 @@ def packet_handler():
                         if dns.domain:
                             query_type = "Sorgu" if dns.is_query else "Yanıt"
                             print(format_output("[DNS]", f"{query_type}: {dns.domain}", CYAN))
+                            
+                            # Log kaydı oluştur - DNS
+                            dns_log = {
+                                'src_ip': ipv4.src,
+                                'dst_ip': ipv4.target,
+                                'query_type': query_type,
+                                'domain': dns.domain
+                            }
+                            collect_log_entry('dns', dns_log)
                     
                     # Paket içeriğini göster (ilk 16 byte hex formatında)
                     if len(udp.data) > 0:
@@ -304,6 +449,15 @@ def packet_handler():
                     packet_stats['icmp'] += 1
                     icmp = ICMPPacket(ipv4.data)
                     print_icmp_packet(icmp)
+                    
+                    # Log kaydı oluştur - ICMP
+                    icmp_log = {
+                        'src_ip': ipv4.src,
+                        'dst_ip': ipv4.target,
+                        'type': icmp.type,
+                        'code': icmp.code
+                    }
+                    collect_log_entry('icmp', icmp_log)
                 
                 # Diğer protokoller
                 else:
@@ -319,11 +473,20 @@ def packet_handler():
                       f"ICMP: {packet_stats['icmp']} | DNS: {packet_stats['dns']} | "
                       f"HTTP: {packet_stats['http']}", GREEN))
                 print("="*50)
+                
+                # Toplanan log sayısını göster
+                with log_lock:
+                    print(format_output("[LOG]", f"Şu ana kadar toplanan log sayısı: {len(collected_logs)}", CYAN))
     
     except KeyboardInterrupt:
         print(format_output("\n[DURDUR]", "Kullanıcı tarafından durduruldu", YELLOW))
     
     finally:
+        # Son logları API'ye gönder
+        if len(collected_logs) > 0:
+            print(format_output("[API]", "Kalan loglar gönderiliyor...", CYAN))
+            send_logs_to_api()
+            
         # Sonuçları göster
         show_results(start_time)
         
@@ -385,8 +548,20 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output', help='JSON rapor çıktı dosyası')
     parser.add_argument('-l', '--list', action='store_true', help='Kullanılabilir ağ arayüzlerini listele')
     parser.add_argument('-r', '--raw', action='store_true', help='Paket içeriğini ham olarak göster')
+    parser.add_argument('--api-url', default=API_URL, help='API URL (varsayılan: {})'.format(API_URL))
+    parser.add_argument('--api-token', default=API_TOKEN, help='API Token')
+    parser.add_argument('--log-interval', type=int, default=LOG_INTERVAL, 
+                        help='Log gönderim aralığı (saniye, varsayılan: {})'.format(LOG_INTERVAL))
     
     args = parser.parse_args()
+    
+    # Komut satırından gelen API ayarlarını güncelle
+    if args.api_url:
+        API_URL = args.api_url
+    if args.api_token:
+        API_TOKEN = args.api_token
+    if args.log_interval:
+        LOG_INTERVAL = args.log_interval
     
     # Arayüzleri listele ve çık
     if args.list:
