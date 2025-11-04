@@ -9,16 +9,8 @@ import os
 import sys
 import json
 from datetime import datetime
-import requests
 
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-config_path = os.path.join(BASE_DIR, 'config.json')
-
-with open(config_path, 'r') as f:
+with open('config.json', 'r') as f:
     config = json.load(f)
 
 def write_to_json(packet_data):
@@ -39,33 +31,6 @@ def write_to_json(packet_data):
     with open(file_path, 'w') as f:
         json.dump(existing_data, f, indent=2)
 
-def log_message(packet_data):
-    try:
-        url = config['api_url'] + "ids-log/"
-
-        headers = {
-            "Authorization": f"Token {config['api_token']}",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "license_key": config['license_key'],
-            "results": [packet_data]
-        }
-
-        response = requests.post(url, headers=headers, json=payload)
-
-        if response.status_code == 201:
-            print("IDS log saved successfully.")
-        else:
-            print(f"IDS log save failed: {response.status_code}\nError: {response.text}")
-            print("Exiting...")
-            sys.exit()
-    except Exception as e:
-        print(f"IDS log save error: {e}")
-        print("Exiting...")
-        sys.exit()
-
 class IntrusionDetectionSystem:
     def __init__(self, syn_threshold=20, scan_threshold=15, time_window=5):
         self.syn_threshold = syn_threshold
@@ -78,10 +43,9 @@ class IntrusionDetectionSystem:
             'ports': set()
         })
         self.port_scan_tracker = {}
-        self.detected_port_scans = {}  # Port taraması tespit edilen IP'leri izlemek için
 
     def packet_callback(self, packet):
-        if os.path.exists(f"{BASE_DIR}/scanner_running.signal"):
+        if os.path.exists("scanner_running.signal"):
             return
 
         if not packet.haslayer(IP) or not packet.haslayer(TCP):
@@ -113,19 +77,20 @@ class IntrusionDetectionSystem:
                     
                     if (self.syn_packets[ip_src]['count'] >= self.syn_threshold and
                         len(self.syn_packets[ip_src]['ports']) < 5):
-#                         alert_message = f"""[ALERT] SYN Flood attack detected! Date: {datetime.now()}
-# Source IP: {ip_src}
-# Last {self.time_window} seconds: {self.syn_packets[ip_src]['count']} SYN packets
-# Number of destination ports: {len(self.syn_packets[ip_src]['ports'])}
-# {'-' * 50}"""
+                        alert_message = f"""[ALERT] SYN Flood attack detected! Date: {datetime.now()}
+Source IP: {ip_src}
+Last {self.time_window} seconds: {self.syn_packets[ip_src]['count']} SYN packets
+Number of destination ports: {len(self.syn_packets[ip_src]['ports'])}
+{'-' * 50}"""
                         packet_data = {
-                            "alert_message": f"[ALERT] Potential SYN Flood attack detected! Date: {datetime.now()}",
+                            "alert_message": f"[ALERT] SYN Flood attack detected! Date: {datetime.now()}",
                             "source_ip": str(ip_src),
                             "packet_count": f"{self.syn_packets[ip_src]['count']} SYN packets in {self.time_window} seconds",
                             "number_of_destination_ports": len(self.syn_packets[ip_src]['ports'])
                         }
+                        write_to_json(packet_data)
                         if config['ids']['ids_log'] == "config":
-                            log_message(packet_data)
+                            write_to_json(packet_data)
                         elif config['ids']['ids_log'] == "terminal":
                             print(alert_message)
                         
@@ -140,13 +105,7 @@ class IntrusionDetectionSystem:
         self.port_scan_tracker[ip_src][dest_port] = current_time
 
         self.port_scan_tracker[ip_src] = {port: t for port, t in self.port_scan_tracker[ip_src].items() if current_time - t < self.time_window}
-        
-        # Daha önce bu IP'den port taraması tespit edilip edilmediğini kontrol et
-        if (ip_src in self.detected_port_scans and 
-            current_time - self.detected_port_scans[ip_src] < self.time_window):
-            # Bu IP'den zaten yakın zamanda bir port taraması tespit edildi, yeni uyarı oluşturma
-            pass
-        elif len(self.port_scan_tracker[ip_src]) >= self.scan_threshold:
+        if len(self.port_scan_tracker[ip_src]) >= self.scan_threshold:
             alert_message = {
                 "alert_message": f"[ALERT] Potential port scan attack detected. {ip_src}! Date: {datetime.now()}",
                 "source_ip": str(ip_src),
@@ -155,17 +114,11 @@ class IntrusionDetectionSystem:
             }
             
             if config['ids']['ids_log'] == 'config':
-                log_message(alert_message)
+                write_to_json(alert_message)
             elif config['ids']['ids_log'] == 'terminal':
                 print(alert_message)
                 
-            # Port taraması tespit edildiğini kaydet
-            self.detected_port_scans[ip_src] = current_time
             self.port_scan_tracker[ip_src] = {}
-        
-        # Eski kayıtları temizle
-        self.detected_port_scans = {ip: t for ip, t in self.detected_port_scans.items() 
-                                 if current_time - t < self.time_window}
 
     def start(self, iface=None):
         if os.geteuid() != 0:
@@ -177,7 +130,7 @@ class IntrusionDetectionSystem:
             "message": start_message
         }
         if config['ids']['ids_log'] == 'config':
-            pass
+            write_to_json(packet_data)
         elif config['ids']['ids_log'] == 'terminal':
             print(start_message)
         try:

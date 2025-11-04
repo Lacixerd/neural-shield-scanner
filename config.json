@@ -1,19 +1,19 @@
 {
-  "scanner": {
-    "scan_type": "range",
-    "port_range_type": "default",
-    "target": "192.168.1.9",
-    "target_range": "192.168.1.0/24",
-    "thread_count": 50,
-    "batch_size": 200
+  "scanner" : {
+      "scan_type" : "range",
+      "port_range_type" : "2",
+      "target" : "192.168.1.9",
+      "target_range" : "192.168.1.0/24",
+      "thread_count" : 50,
+      "batch_size" : 200
   },
-  "ids": {
-    "syn_threshold": 20,
-    "scan_threshold": 15,
-    "time_window": 5,
-    "ids_log": "config"
+  "ids" : {
+      "syn_threshold" : 20,
+      "scan_threshold" : 15,
+      "time_window" : 5,
+      "ids_log": "config"
   },
-  "license_key": "",
-  "api_token": "",
-  "api_url": "https://neuralshieldai.com/api/"
+  "unusual_ip_finder" : {
+      "scan_interval" : 60
+  }
 }

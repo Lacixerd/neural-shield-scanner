@@ -41,9 +41,7 @@ def discover_active_ips(network: str, max_workers: int = 50) -> List[str]:
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(ping_ip, ip_list))
     
-
     arp_ips = arp_scan()
-    
 
     for ip, is_active in zip(ip_list, results):
         if is_active or ip in arp_ips:
@@ -52,7 +50,6 @@ def discover_active_ips(network: str, max_workers: int = 50) -> List[str]:
     return active_ips
 
 def main(target_range):
-    # network = input("Ağ aralığını CIDR formatında girin (örn: 192.168.1.0/24): ")
     print(f"\nStarting IP discovery for {target_range}")
     
     active_ips = discover_active_ips(target_range)
@@ -68,6 +65,3 @@ def main(target_range):
     else:
         print("\nNo active ip address found.")
         return []
-
-# if __name__ == "__main__":
-#     main()

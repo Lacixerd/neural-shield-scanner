@@ -1,22 +1,12 @@
 from port_scanner.port_scanner import run_scanner
 from packet_sniffer.packet_sniffer import main as packet_sniffer_main
 from ids.ids import IntrusionDetectionSystem
+from unusual_ip_finder.unusual_ip_finder import main as unusual_ip_finder_main
 import time
 from threading import Thread
 import json
-import requests
-import sys
-import os
-import argparse
 
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-config_path = os.path.join(BASE_DIR, 'config.json')
-
-with open(config_path, 'r') as f:
+with open('config.json', 'r') as f:
     config = json.load(f)
 
 def run_packet_sniffer():
@@ -56,67 +46,19 @@ def run_port_scanner():
 
 if __name__ == "__main__":
     try:
-        parser = argparse.ArgumentParser(description='Network Security System For Neural Shield')
-        parser.add_argument('--no-sniffer', action='store_true', help='Disable packet sniffer (Not recommended)')
-        parser.add_argument('--no-ids', action='store_true', help='Disable intrusion detection system (Not recommended)')
-        parser.add_argument('--no-scanner', action='store_true', help='Disable port scanner (Not recommended)')
-        parser.add_argument('--license-key', type=str, help='License key to authorize')
-        args = parser.parse_args()
-        if not args.license_key:
-            if config['license_key'] == "":
-                print("Please enter a license key to authorize. Use \"--license-key <key>\" to authorize.")
-                exit()
-        else:
-            with open(config_path, 'w') as f:
-                config['license_key'] = args.license_key
-                json.dump(config, f, indent=2)
-            url = config['api_url'] + "authorize-license-key/"
-            headers = {
-                "Authorization": f"Token {config['api_token']}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "license_key": config['license_key']
-            }
-            try:
-                response = requests.post(url, headers=headers, json=payload)
-                if response.status_code == 200:
-                    print("License key authorized successfully.")
-                    try:
-                        print(f"Subscription expiration date: {response['expire_date']}")
-                    except:
-                        pass
-                else:
-                    print(f"License key authorization failed: {response.status_code}\nError: {response.text}\nCheck your subscription status at https://neuralshieldai.com/.")
-                    with open(config_path, 'w') as f:
-                        config['license_key'] = ""
-                        json.dump(config, f, indent=2)
-                    print("Exiting...")
-                    exit()
-            except Exception as e:
-                print(f"License key authorization error: {e}")
-                print("Exiting...")
-                exit()
+        sniffer_thread = Thread(target=run_packet_sniffer)
+        sniffer_thread.daemon = True
+        sniffer_thread.start()
 
-        if not args.no_sniffer:
-            sniffer_thread = Thread(target=run_packet_sniffer)
-            sniffer_thread.daemon = True
-            sniffer_thread.start()
-        else:
-            print("Packet sniffer disabled.")
+        ids_thread = Thread(target=run_ids)
+        ids_thread.daemon = True
+        ids_thread.start()
 
-        if not args.no_ids:
-            ids_thread = Thread(target=run_ids)
-            ids_thread.daemon = True
-            ids_thread.start()
-        else:
-            print("Intrusion detection system disabled.")
+        unusual_ip_finder_thread = Thread(target=unusual_ip_finder_main)
+        unusual_ip_finder_thread.daemon = True
+        unusual_ip_finder_thread.start()
 
-        if not args.no_scanner:
-            run_port_scanner()
-        else:
-            print("Port scanner disabled.")
-
+        run_port_scanner()
     except KeyboardInterrupt:
         print("\nMain program stopping...")
     except Exception as e:

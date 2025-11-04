@@ -8,83 +8,58 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple
 import json
 import os
-import requests
 
-
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-config_path = os.path.join(BASE_DIR, 'config.json')
-
-with open(config_path, "r") as f:
+with open("config.json", "r") as f:
     config_file = json.load(f)
-
-def log_message(packet_data):
-    try:
-        url = config_file['api_url'] + "network-scan/"
-
-        headers = {
-            "Authorization": f"Token {config_file['api_token']}",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "license_key": config_file['license_key'],
-            "results": [packet_data]
-        }
-
-        response = requests.post(url, headers=headers, json=payload)
-
-        if response.status_code == 201:
-            print("Network Scan log saved successfully.")
-        else:
-            print(f"Network Scan log save failed: {response.status_code}\nError: {response.text}")
-            print("Exiting...")
-            sys.exit()
-    except Exception as e:
-        print(f"Network Scan log save error: {e}")
-        print("Exiting...")
-        sys.exit()
 
 
 def scan_port(target_port: Tuple[str, int]) -> Tuple[int, bool, str]:
     target, port = target_port
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket.setdefaulttimeout(0.5)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        result = s.connect_ex((target, port))
-        
-        if result == 0:
-            try:
-                service = socket.getservbyport(port, 'tcp')
-                s.close()
-                return port, True, service
-            except:
-                s.close()
-                return port, True, "unknown"
-        s.close()
-        return port, False, None
-    except (socket.timeout, socket.gaierror, socket.error) as e:
+    for attempt in range(3):
         try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket.setdefaulttimeout(2.0)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            result = s.connect_ex((target, port))
+            
+            if result == 0:
+                try:
+                    service = socket.getservbyport(port, 'tcp')
+                    s.close()
+                    return port, True, service
+                except:
+                    s.close()
+                    return port, True, "unknown"
             s.close()
-        except:
-            pass
-        return port, False, None
+            if attempt < 2:
+                continue
+            return port, False, None
+        except socket.timeout:
+            try:
+                s.close()
+            except:
+                pass
+            if attempt < 2:
+                continue
+        except (socket.gaierror, socket.error) as e:
+            try:
+                s.close()
+            except:
+                pass
+            return port, False, None
+    return port, False, None
 
 def run_scanner():
     try:
-        with open(f"{BASE_DIR}/scanner_running.signal", "w") as f:
+        with open("scanner_running.signal", "w") as f:
             f.write("1")
     except Exception as e:
         print(f"Scanner Running Signal Error: {e}")
         return
     
     try:
-        MAX_WORKERS = min(config_file["scanner"]["thread_count"], 100)
-        BATCH_SIZE = min(config_file["scanner"]["batch_size"], 200)
+        MAX_WORKERS = min(config_file["scanner"]["thread_count"], 50)
+        BATCH_SIZE = min(config_file["scanner"]["batch_size"], 100)
         
         scan_type = str(config_file["scanner"]["scan_type"])
 
@@ -103,50 +78,21 @@ def run_scanner():
         elif scan_type == 'range':
             target_range = str(config_file["scanner"]["target_range"])
             try:
-                # ip_network = ipaddress.ip_network(target_range)
-                # targets = list(ip_network.hosts())
                 targets = ip_discover(target_range)
-
-                url = config_file['api_url'] + "ip-discover-log/"
-
-                headers = {
-                    "Authorization": f"Token {config_file['api_token']}",
-                    "Content-Type": "application/json"
-                }
-
-                payload = {
-                    "license_key": config_file["license_key"],
-                    "results": targets
-                }
-
-                response = requests.post(url, headers=headers, json=payload)
-
-                if response.status_code == 201:
-                    print("IP Discovery Success")
-                else:
-                    print(f"IP Discovery Failed: {response.status_code}\nError: {response.text}")
-                    print("Exiting...")
-                    sys.exit()
-            
             except ValueError:
                 print("Invalid IP range format. Please use CIDR notation (example: 192.168.1.0/24)")
-                print("Exiting...")
-                sys.exit()
-            except Exception as e:
-                print(f"IP Discovery Error: {e}")
-                print("Exiting...")
                 sys.exit()
 
-        # print("-" * 50)
-        # print("Scan started at: " + str(datetime.now()))
-        # print("Scanning target(s): " + (target if scan_type == 'single' else target_range))
-        # print("-" * 50)
+        print("-" * 50)
+        print("Scan started at: " + str(datetime.now()))
+        print("Scanning target(s): " + (target if scan_type == 'single' else target_range))
+        print("-" * 50)
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             for ip in targets:
                 target = str(ip)
-                # print(f"\nScanning target: {target}")
-                # print(f"Scanning ports {"1-10000..." if config_file['scanner']['port_range_type'] == 'default' else "POPULAR PORTS..."}")
+                print(f"\nScanning target: {target}")
+                print(f"Scanning ports {"1-10000..." if config_file['scanner']['port_range_type'] == 'default' else "POPULAR PORTS..."}")
                 
                 open_ports = []
                 scan_tasks = []
@@ -177,45 +123,32 @@ def run_scanner():
                         if result[1]:
                             open_ports.append(result)
                 
-
                 if open_ports:
-                    # Terminal çıktısı
-                    # print(f"\nOpen ports for {target}:")
-                    # for port, _, service in sorted(open_ports):
-                    #     print("Port {:<6} | State: open | Protocol: TCP | Service: {}".format(port, service))
-                    
-                    # JSON formatında veri saklama
-                    open_port_numbers = [port for port, _, _ in open_ports]
-                    target_data = {
-                        "ip_address": target,
-                        "ports_open": open_port_numbers,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    log_message(target_data)
+                    print(f"\nOpen ports for {target}:")
+                    for port, _, service in sorted(open_ports):
+                        print("Port {:<6} | State: open | Protocol: TCP | Service: {}".format(port, service))
                 else:
-                    pass
-                    # print(f"\nNo open ports found for {target}")
+                    print(f"\nNo open ports found for {target}")
                 
-                # print("\n"+"-" * 50)
-                
+                print("\n"+"-" * 50)
                 
     except KeyboardInterrupt:
         print("\nExiting program.")
         try:
-            os.remove(f"{BASE_DIR}/scanner_running.signal")
+            os.remove("scanner_running.signal")
         except:
             pass
         sys.exit()
     except socket.error:
         print("\nCould not connect to the target IP")
         try:
-            os.remove(f"{BASE_DIR}/scanner_running.signal")
+            os.remove("scanner_running.signal")
         except:
             pass
         sys.exit()
 
     try:
-        os.remove(f"{BASE_DIR}/scanner_running.signal")
+        os.remove("scanner_running.signal")
     except:
         pass
 
