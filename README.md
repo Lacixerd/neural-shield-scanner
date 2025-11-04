@@ -1,11 +1,11 @@
-# Network Scanner
+# Simple Network Scanner ()
 
 Bu ağ tarama aracı, belirtilen IP adresleri veya IP aralıklarında port taraması, paket yakalama, nmap port tarama tespiti ve ağdaki güvenli IP'leri belirlemenize olanak sağlar.
 
 ## ⚠️ Önemli Bilgilendirme
 
 Port scannner çıktıları terminalde görüntülenir, diğer sistemlerin çıktıları logs dosyası altında toplanır.
-**Packet Sniffer, sadece Linux sistemlerde çalışır. Windows veya MacOS desteği yoktur.**
+**Packet Sniffer, sadece Linux sistemlerde çalışır. Şuanlık Windows veya MacOS desteği yok.**
 
 ## 🚀 Özellikler
 
